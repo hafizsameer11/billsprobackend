@@ -248,7 +248,7 @@ return [
          * Edit to trust the proxy's ip address - needed for AWS Load Balancer
          * string[]
          */
-        'proxy' => false,
+        'proxy' => env('L5_SWAGGER_PROXY', false),
 
         /*
          * Configs plugin allows to fetch external configs instead of passing them to SwaggerUIBundle.
@@ -312,7 +312,7 @@ return [
          * Constants which can be used in annotations
          */
         'constants' => [
-            'L5_SWAGGER_CONST_HOST' => env('L5_SWAGGER_CONST_HOST', 'http://my-default-host.com'),
+            'L5_SWAGGER_CONST_HOST' => env('L5_SWAGGER_CONST_HOST', env('APP_URL', 'https://billspro.hmstech.xyz')),
         ],
     ],
 ];

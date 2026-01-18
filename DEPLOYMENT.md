@@ -19,6 +19,7 @@ APP_ENV=production
 APP_KEY=base64:YOUR_APP_KEY_HERE
 APP_DEBUG=false
 APP_URL=https://your-domain.com
+FORCE_HTTPS=true
 ```
 
 ### Database
@@ -54,6 +55,8 @@ MAIL_FROM_NAME="${APP_NAME}"
 ```
 L5_SWAGGER_GENERATE_ALWAYS=true
 L5_SWAGGER_CONST_HOST=https://your-domain.com
+L5_SWAGGER_PROXY=true
+L5_SWAGGER_USE_ABSOLUTE_PATH=true
 ```
 
 ## Deployment Steps
