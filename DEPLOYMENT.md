@@ -109,10 +109,20 @@ If you need initial data:
 php artisan db:seed --force
 ```
 
-### 8. Generate Swagger Documentation
+### 8. Clear Caches and Generate Swagger Documentation
+
+**Important:** Clear all caches before generating Swagger docs:
 
 ```bash
+php artisan config:clear
+php artisan route:clear
+php artisan view:clear
+php artisan cache:clear
 php artisan l5-swagger:generate
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan optimize
 ```
 
 ## Post-Deployment
@@ -129,10 +139,19 @@ chown -R www-data:www-data storage bootstrap/cache
 ### 2. Clear and Cache Configuration
 
 ```bash
+php artisan config:clear
+php artisan route:clear
+php artisan view:clear
+php artisan cache:clear
 php artisan config:cache
 php artisan route:cache
 php artisan view:cache
 php artisan optimize
+```
+
+**Important:** After clearing caches, regenerate Swagger docs:
+```bash
+php artisan l5-swagger:generate
 ```
 
 ### 3. Test API Endpoints

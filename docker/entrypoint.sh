@@ -40,6 +40,17 @@ if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
     php artisan key:generate --force
 fi
 
+# Clear caches first to ensure fresh state
+echo "Clearing caches..."
+php artisan config:clear || true
+php artisan route:clear || true
+php artisan view:clear || true
+php artisan cache:clear || true
+
+# Generate Swagger documentation
+echo "Generating Swagger documentation..."
+php artisan l5-swagger:generate || true
+
 # Cache configuration for better performance
 echo "Optimizing application..."
 php artisan config:cache
