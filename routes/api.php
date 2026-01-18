@@ -30,6 +30,7 @@ use App\Http\Controllers\Api\CryptoController;
 // PUBLIC ROUTES - Authentication
 // ============================================================================
 Route::prefix('auth')->group(function () {
+    Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/verify-email-otp', [AuthController::class, 'verifyEmailOtp']);
     Route::post('/resend-otp', [AuthController::class, 'resendOtp']);

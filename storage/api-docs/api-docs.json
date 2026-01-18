@@ -109,7 +109,7 @@
                     "Authentication"
                 ],
                 "summary": "Verify email OTP and create wallets",
-                "description": "Verifies the OTP sent to user's email. Upon successful verification, automatically creates fiat wallet (NGN for Nigeria) and crypto virtual accounts for all supported currencies.",
+                "description": "Verifies the OTP sent to user's email. Upon successful verification, automatically creates fiat wallet (NGN for Nigeria) and crypto virtual accounts for all supported currencies. Returns authentication token for the user to proceed with KYC.",
                 "operationId": "c7ab02a52fe398a4d2e999a6ddc6a4c5",
                 "requestBody": {
                     "required": true,
@@ -152,6 +152,15 @@
                                             "example": "Email verified successfully. Wallets created."
                                         },
                                         "data": {
+                                            "properties": {
+                                                "user": {
+                                                    "type": "object"
+                                                },
+                                                "token": {
+                                                    "type": "string",
+                                                    "example": "1|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                                }
+                                            },
                                             "type": "object"
                                         }
                                     },
@@ -611,6 +620,82 @@
                     },
                     "400": {
                         "description": "Invalid or expired OTP"
+                    },
+                    "422": {
+                        "description": "Validation error"
+                    }
+                }
+            }
+        },
+        "/api/auth/login": {
+            "post": {
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Login user",
+                "description": "Authenticate user and return access token.",
+                "operationId": "dd51a484b7fa0f97c7680fdbde14cf5f",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "email",
+                                    "password"
+                                ],
+                                "properties": {
+                                    "email": {
+                                        "type": "string",
+                                        "format": "email",
+                                        "example": "john.doe@example.com"
+                                    },
+                                    "password": {
+                                        "type": "string",
+                                        "format": "password",
+                                        "example": "password123"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Login successful",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Login successful"
+                                        },
+                                        "data": {
+                                            "properties": {
+                                                "user": {
+                                                    "type": "object"
+                                                },
+                                                "token": {
+                                                    "type": "string",
+                                                    "example": "1|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid credentials or email not verified"
                     },
                     "422": {
                         "description": "Validation error"

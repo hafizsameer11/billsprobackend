@@ -111,10 +111,14 @@ class AuthService
             $this->cryptoWalletService->initializeUserCryptoWallets($user->id);
         });
 
+        // Generate authentication token for the user
+        $token = $user->createToken('auth-token')->plainTextToken;
+
         return [
             'success' => true,
             'message' => 'Email verified successfully. Wallets created.',
             'user' => $user->fresh(),
+            'token' => $token,
         ];
     }
 
@@ -256,6 +260,47 @@ class AuthService
         return [
             'success' => true,
             'message' => 'Password reset successfully. You can now login with your new password.',
+        ];
+    }
+
+    /**
+     * Login user
+     */
+    public function login(string $email, string $password): array
+    {
+        $user = User::where('email', $email)->first();
+
+        if (!$user) {
+            return [
+                'success' => false,
+                'message' => 'Invalid credentials',
+            ];
+        }
+
+        // Check password
+        if (!Hash::check($password, $user->password)) {
+            return [
+                'success' => false,
+                'message' => 'Invalid credentials',
+            ];
+        }
+
+        // Check if email is verified
+        if (!$user->email_verified) {
+            return [
+                'success' => false,
+                'message' => 'Please verify your email before logging in',
+            ];
+        }
+
+        // Create token
+        $token = $user->createToken('auth-token')->plainTextToken;
+
+        return [
+            'success' => true,
+            'message' => 'Login successful',
+            'user' => $user,
+            'token' => $token,
         ];
     }
 }

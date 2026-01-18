@@ -14,7 +14,9 @@ use App\Http\Requests\Auth\VerifyPasswordResetOtpRequest;
 use App\Http\Requests\Auth\ResetPasswordRequest;
 use App\Services\Auth\AuthService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 use OpenApi\Attributes as OA;
 
 class AuthController extends Controller
@@ -56,9 +58,9 @@ class AuthController extends Controller
     /**
      * Verify email OTP and create wallets
      */
-    #[OA\Post(path: "/api/auth/verify-email-otp", summary: "Verify email OTP and create wallets", description: "Verifies the OTP sent to user's email. Upon successful verification, automatically creates fiat wallet (NGN for Nigeria) and crypto virtual accounts for all supported currencies.", tags: ["Authentication"])]
+    #[OA\Post(path: "/api/auth/verify-email-otp", summary: "Verify email OTP and create wallets", description: "Verifies the OTP sent to user's email. Upon successful verification, automatically creates fiat wallet (NGN for Nigeria) and crypto virtual accounts for all supported currencies. Returns authentication token for the user to proceed with KYC.", tags: ["Authentication"])]
     #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["email", "otp"], properties: [new OA\Property(property: "email", type: "string", format: "email", example: "john.doe@example.com"), new OA\Property(property: "otp", type: "string", example: "12345")]))]
-    #[OA\Response(response: 200, description: "Email verified successfully and wallets created", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "Email verified successfully. Wallets created."), new OA\Property(property: "data", type: "object")]))]
+    #[OA\Response(response: 200, description: "Email verified successfully and wallets created", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "Email verified successfully. Wallets created."), new OA\Property(property: "data", type: "object", properties: [new OA\Property(property: "user", type: "object"), new OA\Property(property: "token", type: "string", example: "1|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")])]))]
     #[OA\Response(response: 400, description: "Invalid or expired OTP")]
     #[OA\Response(response: 422, description: "Validation error")]
     public function verifyEmailOtp(VerifyEmailOtpRequest $request): JsonResponse
@@ -70,7 +72,11 @@ class AuthController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'OTP verification failed', 400);
             }
 
-            return ResponseHelper::success($result, $result['message'] ?? 'Email verified successfully. Wallets created.');
+            // Return user and token in response
+            return ResponseHelper::success([
+                'user' => $result['user'],
+                'token' => $result['token'],
+            ], $result['message'] ?? 'Email verified successfully. Wallets created.');
         } catch (\Exception $e) {
             Log::error('OTP verification error: ' . $e->getMessage(), [
                 'email' => $request->email,
@@ -277,6 +283,46 @@ class AuthController extends Controller
             ]);
 
             return ResponseHelper::serverError('An error occurred while resetting password. Please try again.');
+        }
+    }
+
+    /**
+     * Login user
+     */
+    #[OA\Post(path: "/api/auth/login", summary: "Login user", description: "Authenticate user and return access token.", tags: ["Authentication"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["email", "password"], properties: [new OA\Property(property: "email", type: "string", format: "email", example: "john.doe@example.com"), new OA\Property(property: "password", type: "string", format: "password", example: "password123")]))]
+    #[OA\Response(response: 200, description: "Login successful", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "Login successful"), new OA\Property(property: "data", type: "object", properties: [new OA\Property(property: "user", type: "object"), new OA\Property(property: "token", type: "string", example: "1|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")])]))]
+    #[OA\Response(response: 400, description: "Invalid credentials or email not verified")]
+    #[OA\Response(response: 422, description: "Validation error")]
+    public function login(Request $request): JsonResponse
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'email' => 'required|email',
+                'password' => 'required|string|min:6',
+            ]);
+
+            if ($validator->fails()) {
+                return ResponseHelper::validationError($validator->errors());
+            }
+
+            $result = $this->authService->login($request->email, $request->password);
+
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Login failed', 400);
+            }
+
+            return ResponseHelper::success([
+                'user' => $result['user'],
+                'token' => $result['token'],
+            ], $result['message'] ?? 'Login successful.');
+        } catch (\Exception $e) {
+            Log::error('Login error: ' . $e->getMessage(), [
+                'email' => $request->email,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred during login. Please try again.');
         }
     }
 }
