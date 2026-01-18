@@ -4,8 +4,10 @@ namespace App\Services\Auth;
 
 use App\Models\OtpVerification;
 use App\Models\User;
+use App\Mail\OtpVerificationMail;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class OtpService
 {
@@ -20,7 +22,7 @@ class OtpService
     /**
      * Send OTP to email or phone
      */
-    public function sendOtp(string $email = null, string $phoneNumber = null, string $type = 'email'): array
+    public function sendOtp(string $email = null, string $phoneNumber = null, string $type = 'email', string $emailType = 'email'): array
     {
         $otp = $this->generateOtp();
         $expiresAt = Carbon::now()->addMinutes(5);
@@ -48,9 +50,31 @@ class OtpService
             'expires_at' => $expiresAt,
         ]);
 
-        // TODO: Integrate with email/SMS service
-        // For now, we'll just log it
-        Log::info("OTP sent: {$otp} to " . ($type === 'email' ? $email : $phoneNumber));
+        // Send OTP via email or SMS
+        try {
+            if ($type === 'email' && $email) {
+                // Send email with appropriate template
+                Mail::to($email)->send(new OtpVerificationMail($otp, $emailType, 5));
+                
+                Log::info("OTP email sent successfully to: {$email}", [
+                    'email_type' => $emailType,
+                ]);
+            } elseif ($type === 'phone' && $phoneNumber) {
+                // TODO: Integrate with SMS service (Twilio, etc.)
+                Log::info("OTP SMS should be sent to: {$phoneNumber} (SMS service not integrated yet)");
+            }
+        } catch (\Exception $e) {
+            Log::error("Failed to send OTP: " . $e->getMessage(), [
+                'email' => $email,
+                'phone' => $phoneNumber,
+                'type' => $type,
+                'email_type' => $emailType,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            // Still return success as OTP is generated and stored
+            // The user can request a resend if email fails
+        }
 
         return [
             'success' => true,

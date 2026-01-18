@@ -188,8 +188,8 @@ class AuthService
             ];
         }
 
-        // Send OTP to email
-        $otpResult = $this->otpService->sendOtp($email, null, 'email');
+        // Send OTP to email (for password reset)
+        $otpResult = $this->otpService->sendOtp($email, null, 'email', 'password_reset');
 
         return [
             'success' => true,
