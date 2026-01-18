@@ -39,6 +39,7 @@ class User extends Authenticatable
      */
     protected $hidden = [
         'password',
+        'pin',
         'remember_token',
     ];
 
@@ -92,10 +93,50 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the beneficiaries for the user.
+     */
+    public function beneficiaries()
+    {
+        return $this->hasMany(Beneficiary::class);
+    }
+
+    /**
+     * Get the virtual cards for the user.
+     */
+    public function virtualCards()
+    {
+        return $this->hasMany(VirtualCard::class);
+    }
+
+    /**
      * Get the transactions for the user.
      */
     public function transactions()
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    /**
+     * Get the support tickets for the user.
+     */
+    public function supportTickets()
+    {
+        return $this->hasMany(SupportTicket::class);
+    }
+
+    /**
+     * Get the chat sessions for the user.
+     */
+    public function chatSessions()
+    {
+        return $this->hasMany(ChatSession::class);
+    }
+
+    /**
+     * Get the chat messages for the user.
+     */
+    public function chatMessages()
+    {
+        return $this->hasMany(ChatMessage::class);
     }
 }

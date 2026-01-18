@@ -143,6 +143,33 @@ class WithdrawalController extends Controller
     }
 
     /**
+     * Set a bank account as default
+     */
+    #[OA\Post(path: "/api/withdrawal/bank-accounts/{id}/set-default", summary: "Set default bank account", description: "Set a bank account as the default account for withdrawals.", security: [["sanctum" => []]], tags: ["Withdrawal"])]
+    #[OA\Parameter(name: "id", in: "path", required: true, description: "Bank account ID", schema: new OA\Schema(type: "integer"))]
+    #[OA\Response(response: 200, description: "Default bank account set successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "Default bank account set successfully"), new OA\Property(property: "data", type: "object")]))]
+    #[OA\Response(response: 404, description: "Bank account not found")]
+    #[OA\Response(response: 401, description: "Unauthenticated")]
+    public function setDefaultBankAccount(Request $request, int $id): JsonResponse
+    {
+        try {
+            $bankAccount = $this->withdrawalService->setDefaultBankAccount($request->user()->id, $id);
+
+            return ResponseHelper::success($bankAccount, 'Default bank account set successfully.');
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return ResponseHelper::notFound('Bank account not found.');
+        } catch (\Exception $e) {
+            Log::error('Set default bank account error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'bank_account_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while setting default bank account. Please try again.');
+        }
+    }
+
+    /**
      * Get withdrawal fee
      */
     #[OA\Get(path: "/api/withdrawal/fee", summary: "Get withdrawal fee", description: "Get the withdrawal fee amount.", security: [["sanctum" => []]], tags: ["Withdrawal"])]

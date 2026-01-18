@@ -27,6 +27,7 @@ class WithdrawalService
     {
         return BankAccount::where('user_id', $userId)
             ->where('is_active', true)
+            ->orderBy('is_default', 'desc')
             ->orderBy('created_at', 'desc')
             ->get();
     }
@@ -45,6 +46,11 @@ class WithdrawalService
             throw new \Exception('Bank account already exists');
         }
 
+        // Check if this is the first account for the user (set as default)
+        $hasExistingAccounts = BankAccount::where('user_id', $userId)
+            ->where('is_active', true)
+            ->exists();
+
         return BankAccount::create([
             'user_id' => $userId,
             'bank_name' => $data['bank_name'],
@@ -53,6 +59,7 @@ class WithdrawalService
             'currency' => $data['currency'] ?? 'NGN',
             'country_code' => $data['country_code'] ?? 'NG',
             'is_active' => true,
+            'is_default' => !$hasExistingAccounts, // Set as default if first account
             'metadata' => $data['metadata'] ?? null,
         ]);
     }
@@ -92,10 +99,45 @@ class WithdrawalService
             ->where('id', $bankAccountId)
             ->firstOrFail();
 
+        $wasDefault = $bankAccount->is_default;
+
         // Soft delete by deactivating
-        $bankAccount->update(['is_active' => false]);
+        $bankAccount->update(['is_active' => false, 'is_default' => false]);
+
+        // If this was the default account, set the first remaining account as default
+        if ($wasDefault) {
+            $firstRemaining = BankAccount::where('user_id', $userId)
+                ->where('is_active', true)
+                ->orderBy('created_at', 'asc')
+                ->first();
+
+            if ($firstRemaining) {
+                $firstRemaining->update(['is_default' => true]);
+            }
+        }
 
         return true;
+    }
+
+    /**
+     * Set a bank account as default
+     */
+    public function setDefaultBankAccount(int $userId, int $bankAccountId): BankAccount
+    {
+        $bankAccount = BankAccount::where('user_id', $userId)
+            ->where('id', $bankAccountId)
+            ->where('is_active', true)
+            ->firstOrFail();
+
+        // Remove default from all other accounts
+        BankAccount::where('user_id', $userId)
+            ->where('id', '!=', $bankAccountId)
+            ->update(['is_default' => false]);
+
+        // Set this account as default
+        $bankAccount->update(['is_default' => true]);
+
+        return $bankAccount->fresh();
     }
 
     /**
@@ -129,13 +171,18 @@ class WithdrawalService
             $fee = $this->withdrawalFee;
             $totalAmount = $amount + $fee;
 
-            // Get fiat wallet
-            $fiatWallet = $this->walletService->getFiatWallet($userId, 'NGN', 'NG');
+            // Get fiat wallet with lock
+            $fiatWallet = FiatWallet::where('user_id', $userId)
+                ->where('currency', 'NGN')
+                ->where('country_code', 'NG')
+                ->lockForUpdate()
+                ->first();
+                
             if (!$fiatWallet) {
                 throw new \Exception('Fiat wallet not found');
             }
 
-            // Check sufficient balance
+            // Check sufficient balance inside transaction with lock
             $availableBalance = (float) $fiatWallet->balance - (float) $fiatWallet->locked_balance;
             if ($availableBalance < $totalAmount) {
                 throw new \Exception('Insufficient balance');

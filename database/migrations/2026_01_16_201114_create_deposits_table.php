@@ -32,11 +32,6 @@ return new class extends Migration
             $table->index('status');
             $table->index('created_at');
         });
-
-        // Add foreign key constraint after transactions table is created
-        Schema::table('deposits', function (Blueprint $table) {
-            $table->foreign('transaction_id')->references('id')->on('transactions')->onDelete('set null');
-        });
     }
 
     /**

@@ -8,6 +8,7 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Requests\Auth\VerifyEmailOtpRequest;
 use App\Http\Requests\Auth\ResendOtpRequest;
 use App\Http\Requests\Auth\SetPinRequest;
+use App\Http\Requests\Auth\VerifyPinRequest;
 use App\Http\Requests\Auth\ForgotPasswordRequest;
 use App\Http\Requests\Auth\VerifyPasswordResetOtpRequest;
 use App\Http\Requests\Auth\ResetPasswordRequest;
@@ -112,7 +113,7 @@ class AuthController extends Controller
      */
     #[OA\Post(path: "/api/auth/set-pin", summary: "Set 4-digit PIN for transactions", security: [["sanctum" => []]], tags: ["Authentication"])]
     #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["pin"], properties: [new OA\Property(property: "pin", type: "string", example: "1234")]))]
-    #[OA\Response(response: 200, description: "PIN set successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "PIN set successfully")]))]
+    #[OA\Response(response: 200, description: "PIN set successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "Your transaction pin has been set successfully")]))]
     #[OA\Response(response: 400, description: "Invalid PIN format")]
     #[OA\Response(response: 401, description: "Unauthenticated")]
     #[OA\Response(response: 422, description: "Validation error")]
@@ -125,7 +126,7 @@ class AuthController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'PIN setup failed', 400);
             }
 
-            return ResponseHelper::success(null, $result['message'] ?? 'PIN set successfully.');
+            return ResponseHelper::success(null, $result['message'] ?? 'Your transaction pin has been set successfully.');
         } catch (\Exception $e) {
             Log::error('Set PIN error: ' . $e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -133,6 +134,61 @@ class AuthController extends Controller
             ]);
 
             return ResponseHelper::serverError('An error occurred while setting PIN. Please try again.');
+        }
+    }
+
+    /**
+     * Check if user has set up transaction PIN
+     */
+    #[OA\Get(path: "/api/auth/check-pin-status", summary: "Check if user has set up transaction PIN", security: [["sanctum" => []]], tags: ["Authentication"])]
+    #[OA\Response(response: 200, description: "PIN status retrieved successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "PIN is set"), new OA\Property(property: "data", type: "object")]))]
+    #[OA\Response(response: 401, description: "Unauthenticated")]
+    public function checkPinStatus(\Illuminate\Http\Request $request): JsonResponse
+    {
+        try {
+            $result = $this->authService->checkPinStatus($request->user());
+
+            return ResponseHelper::success(['pin_set' => $result['pin_set']], $result['message']);
+        } catch (\Exception $e) {
+            Log::error('Check PIN status error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while checking PIN status. Please try again.');
+        }
+    }
+
+    /**
+     * Verify transaction PIN
+     */
+    #[OA\Post(path: "/api/auth/verify-pin", summary: "Verify transaction PIN", security: [["sanctum" => []]], tags: ["Authentication"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["pin"], properties: [new OA\Property(property: "pin", type: "string", example: "1234")]))]
+    #[OA\Response(response: 200, description: "PIN verified successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "message", type: "string", example: "PIN verified successfully")]))]
+    #[OA\Response(response: 400, description: "Invalid PIN or PIN not set")]
+    #[OA\Response(response: 401, description: "Unauthenticated")]
+    #[OA\Response(response: 422, description: "Validation error")]
+    public function verifyPin(VerifyPinRequest $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            $isValid = $this->authService->verifyPin($user, $request->pin);
+
+            if (!$isValid) {
+                if (!$user->pin) {
+                    return ResponseHelper::error('PIN not set. Please setup your PIN first.', 400);
+                }
+                return ResponseHelper::error('Invalid PIN', 400);
+            }
+
+            return ResponseHelper::success(null, 'PIN verified successfully');
+        } catch (\Exception $e) {
+            Log::error('Verify PIN error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while verifying PIN. Please try again.');
         }
     }
 

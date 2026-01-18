@@ -16,6 +16,7 @@ class BankAccount extends Model
         'currency',
         'country_code',
         'is_active',
+        'is_default',
         'metadata',
     ];
 
@@ -23,6 +24,7 @@ class BankAccount extends Model
     {
         return [
             'is_active' => 'boolean',
+            'is_default' => 'boolean',
             'metadata' => 'array',
         ];
     }

@@ -15,6 +15,10 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             WalletCurrencySeeder::class,
+            BankAccountSeeder::class,
+            BillPaymentCategorySeeder::class,
+            BillPaymentProviderSeeder::class,
+            BillPaymentPlanSeeder::class,
         ]);
     }
 }

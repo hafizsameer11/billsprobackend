@@ -142,7 +142,19 @@ class AuthService
 
         return [
             'success' => true,
-            'message' => 'PIN set successfully',
+            'message' => 'Your transaction pin has been set successfully',
+        ];
+    }
+
+    /**
+     * Check if user has set up PIN
+     */
+    public function checkPinStatus(User $user): array
+    {
+        return [
+            'success' => true,
+            'pin_set' => !empty($user->pin),
+            'message' => $user->pin ? 'PIN is set' : 'PIN is not set',
         ];
     }
 

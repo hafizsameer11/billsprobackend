@@ -77,19 +77,20 @@ class DepositService
      */
     public function confirmDeposit(int $userId, string $reference): array
     {
-        $deposit = Deposit::where('user_id', $userId)
-            ->where('deposit_reference', $reference)
-            ->where('status', 'pending')
-            ->first();
+        return DB::transaction(function () use ($userId, $reference) {
+            // Lock deposit to prevent double processing
+            $deposit = Deposit::where('user_id', $userId)
+                ->where('deposit_reference', $reference)
+                ->where('status', 'pending')
+                ->lockForUpdate()
+                ->first();
 
-        if (!$deposit) {
-            return [
-                'success' => false,
-                'message' => 'Deposit not found or already processed',
-            ];
-        }
-
-        return DB::transaction(function () use ($deposit, $userId) {
+            if (!$deposit) {
+                return [
+                    'success' => false,
+                    'message' => 'Deposit not found or already processed',
+                ];
+            }
             // Update deposit status
             $deposit->update([
                 'status' => 'completed',
@@ -121,17 +122,18 @@ class DepositService
             // Link transaction to deposit
             $deposit->update(['transaction_id' => $transaction->id]);
 
-            // Credit user's fiat wallet
+            // Credit user's fiat wallet with lock
             $countryCode = $deposit->currency === 'NGN' ? 'NG' : ($deposit->currency === 'USD' ? 'US' : 'NG');
             $fiatWallet = FiatWallet::where('user_id', $userId)
                 ->where('currency', $deposit->currency)
                 ->where('country_code', $countryCode)
+                ->lockForUpdate()
                 ->first();
 
             if ($fiatWallet) {
                 $fiatWallet->increment('balance', $deposit->amount);
             } else {
-                // Create wallet if it doesn't exist
+                // Create wallet if it doesn't exist (no lock needed for new record)
                 $fiatWallet = FiatWallet::create([
                     'user_id' => $userId,
                     'currency' => $deposit->currency,
@@ -148,7 +150,7 @@ class DepositService
                 'deposit' => $deposit->fresh(),
                 'transaction' => $transaction,
             ];
-        });
+        }, 5); // Retry up to 5 times on deadlock
     }
 
     /**
