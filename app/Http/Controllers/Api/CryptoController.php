@@ -166,8 +166,8 @@ class CryptoController extends Controller
     /**
      * Preview buy crypto
      */
-    #[OA\Post(path: "/api/crypto/buy/preview", summary: "Preview buy crypto", description: "Preview buy crypto transaction with fees and exchange rate.", security: [["sanctum" => []]], tags: ["Crypto"])]
-    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC"), new OA\Property(property: "blockchain", type: "string", example: "BTC"), new OA\Property(property: "amount", type: "number", example: 1000), new OA\Property(property: "payment_method", type: "string", enum: ["naira", "crypto_wallet"], example: "naira")]))]
+    #[OA\Post(path: "/api/crypto/buy/preview", summary: "Preview buy crypto", description: "Preview buy crypto transaction with fees and exchange rate. The amount parameter is in NGN (Naira) - the amount you want to spend to buy crypto.", security: [["sanctum" => []]], tags: ["Crypto"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC", description: "Crypto currency to buy"), new OA\Property(property: "blockchain", type: "string", example: "BTC", description: "Blockchain network"), new OA\Property(property: "amount", type: "number", example: 1000, description: "Amount in NGN (Naira) to spend on buying crypto"), new OA\Property(property: "payment_method", type: "string", enum: ["naira", "crypto_wallet"], example: "naira", description: "Payment method")]))]
     #[OA\Response(response: 200, description: "Preview retrieved successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "data", type: "object")]))]
     #[OA\Response(response: 400, description: "Invalid request")]
     #[OA\Response(response: 401, description: "Unauthenticated")]
@@ -202,8 +202,8 @@ class CryptoController extends Controller
     /**
      * Confirm buy crypto
      */
-    #[OA\Post(path: "/api/crypto/buy/confirm", summary: "Confirm buy crypto", description: "Confirm and execute buy crypto transaction.", security: [["sanctum" => []]], tags: ["Crypto"])]
-    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC"), new OA\Property(property: "blockchain", type: "string", example: "BTC"), new OA\Property(property: "amount", type: "number", example: 1000), new OA\Property(property: "payment_method", type: "string", enum: ["naira", "crypto_wallet"], example: "naira")]))]
+    #[OA\Post(path: "/api/crypto/buy/confirm", summary: "Confirm buy crypto", description: "Confirm and execute buy crypto transaction. The amount parameter is in NGN (Naira) - the amount you want to spend to buy crypto.", security: [["sanctum" => []]], tags: ["Crypto"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC", description: "Crypto currency to buy"), new OA\Property(property: "blockchain", type: "string", example: "BTC", description: "Blockchain network"), new OA\Property(property: "amount", type: "number", example: 1000, description: "Amount in NGN (Naira) to spend on buying crypto"), new OA\Property(property: "payment_method", type: "string", enum: ["naira", "crypto_wallet"], example: "naira", description: "Payment method")]))]
     #[OA\Response(response: 200, description: "Transaction completed successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "data", type: "object")]))]
     #[OA\Response(response: 400, description: "Invalid request or insufficient balance")]
     #[OA\Response(response: 401, description: "Unauthenticated")]
@@ -238,8 +238,8 @@ class CryptoController extends Controller
     /**
      * Preview sell crypto
      */
-    #[OA\Post(path: "/api/crypto/sell/preview", summary: "Preview sell crypto", description: "Preview sell crypto transaction with fees and exchange rate.", security: [["sanctum" => []]], tags: ["Crypto"])]
-    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC"), new OA\Property(property: "blockchain", type: "string", example: "BTC"), new OA\Property(property: "amount", type: "number", example: 0.001)]))]
+    #[OA\Post(path: "/api/crypto/sell/preview", summary: "Preview sell crypto", description: "Preview sell crypto transaction with fees and exchange rate. The amount parameter is in the crypto currency - the amount of crypto you want to sell.", security: [["sanctum" => []]], tags: ["Crypto"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC", description: "Crypto currency to sell"), new OA\Property(property: "blockchain", type: "string", example: "BTC", description: "Blockchain network"), new OA\Property(property: "amount", type: "number", example: 0.001, description: "Amount in crypto currency to sell (e.g., 0.001 BTC)")]))]
     #[OA\Response(response: 200, description: "Preview retrieved successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "data", type: "object")]))]
     #[OA\Response(response: 400, description: "Invalid request or insufficient balance")]
     #[OA\Response(response: 401, description: "Unauthenticated")]
@@ -273,8 +273,8 @@ class CryptoController extends Controller
     /**
      * Confirm sell crypto
      */
-    #[OA\Post(path: "/api/crypto/sell/confirm", summary: "Confirm sell crypto", description: "Confirm and execute sell crypto transaction.", security: [["sanctum" => []]], tags: ["Crypto"])]
-    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC"), new OA\Property(property: "blockchain", type: "string", example: "BTC"), new OA\Property(property: "amount", type: "number", example: 0.001)]))]
+    #[OA\Post(path: "/api/crypto/sell/confirm", summary: "Confirm sell crypto", description: "Confirm and execute sell crypto transaction. The amount parameter is in the crypto currency - the amount of crypto you want to sell.", security: [["sanctum" => []]], tags: ["Crypto"])]
+    #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ["currency", "blockchain", "amount"], properties: [new OA\Property(property: "currency", type: "string", example: "BTC", description: "Crypto currency to sell"), new OA\Property(property: "blockchain", type: "string", example: "BTC", description: "Blockchain network"), new OA\Property(property: "amount", type: "number", example: 0.001, description: "Amount in crypto currency to sell (e.g., 0.001 BTC)")]))]
     #[OA\Response(response: 200, description: "Transaction completed successfully", content: new OA\JsonContent(properties: [new OA\Property(property: "success", type: "boolean", example: true), new OA\Property(property: "data", type: "object")]))]
     #[OA\Response(response: 400, description: "Invalid request or insufficient balance")]
     #[OA\Response(response: 401, description: "Unauthenticated")]

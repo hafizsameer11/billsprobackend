@@ -2311,7 +2311,7 @@
                     "Crypto"
                 ],
                 "summary": "Preview buy crypto",
-                "description": "Preview buy crypto transaction with fees and exchange rate.",
+                "description": "Preview buy crypto transaction with fees and exchange rate. The amount parameter is in NGN (Naira) - the amount you want to spend to buy crypto.",
                 "operationId": "85864c1d8a568d6eaa9c5eb20da639aa",
                 "requestBody": {
                     "required": true,
@@ -2325,18 +2325,22 @@
                                 ],
                                 "properties": {
                                     "currency": {
+                                        "description": "Crypto currency to buy",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "blockchain": {
+                                        "description": "Blockchain network",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "amount": {
+                                        "description": "Amount in NGN (Naira) to spend on buying crypto",
                                         "type": "number",
                                         "example": 1000
                                     },
                                     "payment_method": {
+                                        "description": "Payment method",
                                         "type": "string",
                                         "enum": [
                                             "naira",
@@ -2390,7 +2394,7 @@
                     "Crypto"
                 ],
                 "summary": "Confirm buy crypto",
-                "description": "Confirm and execute buy crypto transaction.",
+                "description": "Confirm and execute buy crypto transaction. The amount parameter is in NGN (Naira) - the amount you want to spend to buy crypto.",
                 "operationId": "908cdf429efbf6f33cc3d220250714f3",
                 "requestBody": {
                     "required": true,
@@ -2404,18 +2408,22 @@
                                 ],
                                 "properties": {
                                     "currency": {
+                                        "description": "Crypto currency to buy",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "blockchain": {
+                                        "description": "Blockchain network",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "amount": {
+                                        "description": "Amount in NGN (Naira) to spend on buying crypto",
                                         "type": "number",
                                         "example": 1000
                                     },
                                     "payment_method": {
+                                        "description": "Payment method",
                                         "type": "string",
                                         "enum": [
                                             "naira",
@@ -2469,7 +2477,7 @@
                     "Crypto"
                 ],
                 "summary": "Preview sell crypto",
-                "description": "Preview sell crypto transaction with fees and exchange rate.",
+                "description": "Preview sell crypto transaction with fees and exchange rate. The amount parameter is in the crypto currency - the amount of crypto you want to sell.",
                 "operationId": "13900a3fc1dee096eb3694789a6a7b1c",
                 "requestBody": {
                     "required": true,
@@ -2483,14 +2491,17 @@
                                 ],
                                 "properties": {
                                     "currency": {
+                                        "description": "Crypto currency to sell",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "blockchain": {
+                                        "description": "Blockchain network",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "amount": {
+                                        "description": "Amount in crypto currency to sell (e.g., 0.001 BTC)",
                                         "type": "number",
                                         "example": 0.001
                                     }
@@ -2540,7 +2551,7 @@
                     "Crypto"
                 ],
                 "summary": "Confirm sell crypto",
-                "description": "Confirm and execute sell crypto transaction.",
+                "description": "Confirm and execute sell crypto transaction. The amount parameter is in the crypto currency - the amount of crypto you want to sell.",
                 "operationId": "1bec8b57d60f0c6cc996712f334d9995",
                 "requestBody": {
                     "required": true,
@@ -2554,14 +2565,17 @@
                                 ],
                                 "properties": {
                                     "currency": {
+                                        "description": "Crypto currency to sell",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "blockchain": {
+                                        "description": "Blockchain network",
                                         "type": "string",
                                         "example": "BTC"
                                     },
                                     "amount": {
+                                        "description": "Amount in crypto currency to sell (e.g., 0.001 BTC)",
                                         "type": "number",
                                         "example": 0.001
                                     }
