@@ -102,13 +102,34 @@ class TransactionService
     }
 
     /**
-     * Get transaction by ID
+     * Get transaction by ID (checks both Transaction and VirtualCardTransaction)
      */
-    public function getTransaction(int $userId, string $transactionId): ?Transaction
+    public function getTransaction(int $userId, string $transactionId)
     {
-        return Transaction::where('user_id', $userId)
+        // First, try to find in regular Transaction model
+        $transaction = Transaction::where('user_id', $userId)
             ->where('transaction_id', $transactionId)
             ->first();
+
+        if ($transaction) {
+            return $transaction;
+        }
+
+        // If not found, check VirtualCardTransaction model
+        $cardTransaction = VirtualCardTransaction::where('user_id', $userId)
+            ->where(function ($query) use ($transactionId) {
+                $query->where('transaction_id', $transactionId)
+                    ->orWhere('reference', $transactionId);
+            })
+            ->first();
+
+        if ($cardTransaction) {
+            // Convert VirtualCardTransaction to a format compatible with Transaction
+            // We'll create a mock Transaction object or return an array
+            return $cardTransaction;
+        }
+
+        return null;
     }
 
     /**
@@ -320,7 +341,7 @@ class TransactionService
     /**
      * Map virtual card transaction type to standard transaction type
      */
-    protected function mapCardTransactionType(string $cardType): string
+    public function mapCardTransactionType(string $cardType): string
     {
         return match($cardType) {
             'fund' => 'card_funding',

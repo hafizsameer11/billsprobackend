@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
+use App\Models\VirtualCardTransaction;
 use App\Services\Transaction\TransactionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -298,10 +299,44 @@ class TransactionController extends Controller
 
     /**
      * Format transaction to include token for prepaid electricity
+     * Handles both Transaction and VirtualCardTransaction models
      */
     protected function formatTransaction($transaction): array
     {
+        // Check if it's a VirtualCardTransaction
+        $isVirtualCardTransaction = $transaction instanceof VirtualCardTransaction;
+        
         $metadata = $transaction->metadata ?? [];
+        
+        if ($isVirtualCardTransaction) {
+            // Format VirtualCardTransaction
+            $cardMetadata = array_merge($metadata, [
+                'virtual_card_id' => $transaction->virtual_card_id,
+                'payment_wallet_type' => $transaction->payment_wallet_type,
+                'payment_wallet_currency' => $transaction->payment_wallet_currency,
+                'exchange_rate' => $transaction->exchange_rate,
+            ]);
+
+            return [
+                'id' => $transaction->id,
+                'transaction_id' => $transaction->transaction_id ?? $transaction->reference,
+                'wallet_type' => 'virtual_card',
+                'type' => $this->mapCardTransactionType($transaction->type),
+                'category' => 'virtual_card',
+                'status' => $transaction->status,
+                'currency' => $transaction->currency,
+                'amount' => (float) $transaction->amount,
+                'fee' => (float) $transaction->fee,
+                'total_amount' => (float) $transaction->total_amount,
+                'reference' => $transaction->reference,
+                'description' => $transaction->description,
+                'metadata' => $cardMetadata,
+                'created_at' => $transaction->created_at?->toISOString(),
+                'updated_at' => $transaction->updated_at?->toISOString(),
+            ];
+        }
+
+        // Format regular Transaction
         $isPrepaidElectricity = $transaction->type === 'bill_payment' 
             && $transaction->category === 'electricity' 
             && isset($metadata['accountType']) 
@@ -335,5 +370,13 @@ class TransactionController extends Controller
         }
 
         return $formatted;
+    }
+
+    /**
+     * Map virtual card transaction type to standard transaction type
+     */
+    protected function mapCardTransactionType(string $cardType): string
+    {
+        return $this->transactionService->mapCardTransactionType($cardType);
     }
 }
