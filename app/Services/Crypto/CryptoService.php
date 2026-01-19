@@ -343,22 +343,30 @@ class CryptoService
         $paymentMethod = $data['payment_method'] ?? 'naira';
 
         return DB::transaction(function () use ($userId, $currency, $blockchain, $previewData, $paymentMethod) {
-            // Deduct from payment wallet with lock
-            if ($paymentMethod === 'naira') {
-                $fiatWallet = FiatWallet::where('user_id', $userId)
-                    ->where('currency', 'NGN')
-                    ->where('country_code', 'NG')
+            // Deduct from Naira wallet with lock (buy always uses Naira)
+            $fiatWallet = FiatWallet::where('user_id', $userId)
+                ->where('currency', 'NGN')
+                ->where('country_code', 'NG')
+                ->lockForUpdate()
+                ->first();
+                
+            if (!$fiatWallet) {
+                // Create wallet if doesn't exist
+                $fiatWallet = $this->walletService->createFiatWallet($userId, 'NGN', 'NG');
+                // Reload with lock
+                $fiatWallet = FiatWallet::where('id', $fiatWallet->id)
                     ->lockForUpdate()
                     ->first();
-                    
-                if (!$fiatWallet || $fiatWallet->balance < $previewData['total_amount']) {
-                    return [
-                        'success' => false,
-                        'message' => 'Insufficient balance',
-                    ];
-                }
-                $fiatWallet->decrement('balance', $previewData['total_amount']);
             }
+            
+            if ($fiatWallet->balance < $previewData['total_amount']) {
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient balance',
+                ];
+            }
+            
+            $fiatWallet->decrement('balance', $previewData['total_amount']);
 
             // Credit crypto wallet (lock for update to prevent race conditions)
             $account = VirtualAccount::where('user_id', $userId)
@@ -369,19 +377,62 @@ class CryptoService
                 ->first();
 
             if (!$account) {
-                // Initialize account if doesn't exist
+                // Try to initialize all wallets first
                 $this->cryptoWalletService->initializeUserCryptoWallets($userId);
+                
+                // Try to find account again
                 $account = VirtualAccount::where('user_id', $userId)
                     ->where('currency', $currency)
                     ->where('blockchain', $blockchain)
                     ->where('active', true)
                     ->lockForUpdate()
                     ->first();
+                
+                // If still not found, create it directly
+                if (!$account) {
+                    $walletCurrency = \App\Models\WalletCurrency::where('currency', $currency)
+                        ->where('blockchain', $blockchain)
+                        ->where('is_active', true)
+                        ->first();
+                    
+                    $accountId = strtoupper($blockchain) . '_' . strtoupper($currency) . '_' . $userId . '_' . time() . '_' . \Illuminate\Support\Str::random(8);
+                    
+                    $account = VirtualAccount::create([
+                        'user_id' => $userId,
+                        'currency_id' => $walletCurrency?->id,
+                        'blockchain' => $blockchain,
+                        'currency' => $currency,
+                        'customer_id' => 'CUST_' . $userId,
+                        'account_id' => $accountId,
+                        'account_code' => \Illuminate\Support\Str::random(10),
+                        'active' => true,
+                        'frozen' => false,
+                        'account_balance' => '0',
+                        'available_balance' => '0',
+                        'accounting_currency' => $currency,
+                    ]);
+                    
+                    // Reload with lock for update
+                    $account = VirtualAccount::where('id', $account->id)
+                        ->lockForUpdate()
+                        ->first();
+                }
             }
 
             if ($account) {
-                $account->increment('available_balance', $previewData['crypto_amount']);
-                $account->increment('account_balance', $previewData['crypto_amount']);
+                // Manually update balances since they're stored as strings
+                $currentAvailableBalance = (float) ($account->available_balance ?? '0');
+                $currentAccountBalance = (float) ($account->account_balance ?? '0');
+                $newAvailableBalance = $currentAvailableBalance + $previewData['crypto_amount'];
+                $newAccountBalance = $currentAccountBalance + $previewData['crypto_amount'];
+                
+                $account->available_balance = (string) $newAvailableBalance;
+                $account->account_balance = (string) $newAccountBalance;
+                $account->save();
+                
+                // Refresh account with relationships
+                $account->refresh();
+                $account->load('walletCurrency');
             }
 
             // Create transaction
@@ -413,7 +464,8 @@ class CryptoService
                 'message' => 'Crypto purchase completed successfully',
                 'data' => [
                     'transaction' => $transaction,
-                    'account' => $account ? $this->formatAccount($account->fresh()) : null,
+                    'account' => $account ? $this->formatAccount($account->load('walletCurrency')) : null,
+                    'fiat_wallet' => isset($fiatWallet) ? $fiatWallet->fresh() : null,
                 ],
             ];
         });
@@ -453,7 +505,8 @@ class CryptoService
 
         // Note: Balance check here is for preview only
         // Final check will be done in confirm with lockForUpdate
-        if ($account->available_balance < $amount) {
+        $currentBalance = (float) ($account->available_balance ?? '0');
+        if ($currentBalance < $amount) {
             return [
                 'success' => false,
                 'message' => 'Insufficient balance',
@@ -526,15 +579,26 @@ class CryptoService
             }
 
             // Check balance inside transaction with lock
-            if ($account->available_balance < $previewData['total_crypto_amount']) {
+            $currentAvailableBalance = (float) ($account->available_balance ?? '0');
+            if ($currentAvailableBalance < $previewData['total_crypto_amount']) {
                 return [
                     'success' => false,
                     'message' => 'Insufficient balance',
                 ];
             }
 
-            $account->decrement('available_balance', $previewData['total_crypto_amount']);
-            $account->decrement('account_balance', $previewData['total_crypto_amount']);
+            // Manually update balances since they're stored as strings
+            $currentAccountBalance = (float) ($account->account_balance ?? '0');
+            $newAvailableBalance = $currentAvailableBalance - $previewData['total_crypto_amount'];
+            $newAccountBalance = $currentAccountBalance - $previewData['total_crypto_amount'];
+            
+            $account->available_balance = (string) $newAvailableBalance;
+            $account->account_balance = (string) $newAccountBalance;
+            $account->save();
+            
+            // Refresh account with relationships
+            $account->refresh();
+            $account->load('walletCurrency');
 
             // Credit Naira wallet with lock
             $fiatWallet = FiatWallet::where('user_id', $userId)
@@ -577,7 +641,7 @@ class CryptoService
                 'message' => 'Crypto sale completed successfully',
                 'data' => [
                     'transaction' => $transaction,
-                    'account' => $this->formatAccount($account->fresh()),
+                    'account' => $this->formatAccount($account->load('walletCurrency')),
                     'fiat_wallet' => $fiatWallet->fresh(),
                 ],
             ];
@@ -638,16 +702,22 @@ class CryptoService
             }
 
             // Check balance inside transaction with lock
-            if ($account->available_balance < $totalAmount) {
+            $currentAvailableBalance = (float) ($account->available_balance ?? '0');
+            if ($currentAvailableBalance < $totalAmount) {
                 return [
                     'success' => false,
                     'message' => 'Insufficient balance',
                 ];
             }
 
-            // Debit account
-            $account->decrement('available_balance', $totalAmount);
-            $account->decrement('account_balance', $totalAmount);
+            // Manually update balances since they're stored as strings
+            $currentAccountBalance = (float) ($account->account_balance ?? '0');
+            $newAvailableBalance = $currentAvailableBalance - $totalAmount;
+            $newAccountBalance = $currentAccountBalance - $totalAmount;
+            
+            $account->available_balance = (string) $newAvailableBalance;
+            $account->account_balance = (string) $newAccountBalance;
+            $account->save();
 
             // Generate transaction hash (mock for now)
             $txHash = '0x' . bin2hex(random_bytes(32));
