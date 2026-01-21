@@ -9,6 +9,8 @@ use App\Services\KycService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Database\QueryException;
 use OpenApi\Attributes as OA;
 
 class KycController extends Controller
@@ -33,14 +35,53 @@ class KycController extends Controller
         try {
             $result = $this->kycService->submitKyc($request->user()->id, $request->validated());
 
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'KYC submission failed', 400);
+            }
+
             return ResponseHelper::success($result, $result['message'] ?? 'KYC information submitted successfully.');
-        } catch (\Exception $e) {
-            Log::error('KYC submission error: ' . $e->getMessage(), [
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return ResponseHelper::validationError($e->errors(), 'Validation failed');
+        } catch (\Illuminate\Database\QueryException $e) {
+            Log::error('KYC submission database error: ' . $e->getMessage(), [
                 'user_id' => $request->user()->id,
+                'error_code' => $e->getCode(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while submitting KYC information. Please try again.');
+            // Check for specific database errors
+            $errorCode = $e->getCode();
+            $errorMessage = $e->getMessage();
+
+            if (str_contains($errorMessage, 'Duplicate entry')) {
+                return ResponseHelper::error('KYC information already exists for this user. Please update instead.', 409);
+            }
+
+            if (str_contains($errorMessage, 'foreign key constraint')) {
+                return ResponseHelper::error('Invalid user. Please ensure you are authenticated correctly.', 400);
+            }
+
+            // Return detailed error in development, generic in production
+            $message = config('app.debug') 
+                ? "Database error: {$errorMessage}" 
+                : 'An error occurred while submitting KYC information. Please try again.';
+
+            return ResponseHelper::error($message, 500);
+        } catch (\Exception $e) {
+            Log::error('KYC submission error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            // Return detailed error in development, generic in production
+            $message = config('app.debug') 
+                ? "Error: {$e->getMessage()} (File: {$e->getFile()}, Line: {$e->getLine()})" 
+                : 'An error occurred while submitting KYC information. Please try again.';
+
+            return ResponseHelper::error($message, 500);
         }
     }
 
@@ -59,10 +100,17 @@ class KycController extends Controller
         } catch (\Exception $e) {
             Log::error('Get KYC error: ' . $e->getMessage(), [
                 'user_id' => $request->user()->id,
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while retrieving KYC information. Please try again.');
+            $message = config('app.debug') 
+                ? "Error: {$e->getMessage()} (File: {$e->getFile()}, Line: {$e->getLine()})" 
+                : 'An error occurred while retrieving KYC information. Please try again.';
+
+            return ResponseHelper::error($message, 500);
         }
     }
 }
