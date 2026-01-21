@@ -62,15 +62,35 @@ class WithdrawalController extends Controller
             );
 
             return ResponseHelper::success($bankAccount, 'Bank account added successfully.', 201);
+        } catch (\Illuminate\Database\QueryException $e) {
+            Log::error('Add bank account database error', [
+                'user_id' => $request->user()->id,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            // Check for unique constraint violation
+            if ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry')) {
+                return ResponseHelper::error('Bank account already exists', 400);
+            }
+
+            return ResponseHelper::serverError('An error occurred while adding bank account. Please try again.');
         } catch (\Exception $e) {
             Log::error('Add bank account error: ' . $e->getMessage(), [
                 'user_id' => $request->user()->id,
+                'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
             $message = $e->getMessage();
             if (str_contains($message, 'already exists')) {
                 return ResponseHelper::error($message, 400);
+            }
+
+            // In development, return the actual error message for debugging
+            if (config('app.debug')) {
+                return ResponseHelper::error($message, 500);
             }
 
             return ResponseHelper::serverError('An error occurred while adding bank account. Please try again.');

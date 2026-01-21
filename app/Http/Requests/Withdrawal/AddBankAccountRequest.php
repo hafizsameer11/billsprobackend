@@ -25,8 +25,8 @@ class AddBankAccountRequest extends FormRequest
             'bank_name' => 'required|string|max:255',
             'account_number' => 'required|string|max:50',
             'account_name' => 'required|string|max:255',
-            'currency' => 'nullable|string|size:3',
-            'country_code' => 'nullable|string|size:2',
+            'currency' => 'nullable|string|max:10',
+            'country_code' => 'nullable|string|max:10',
             'metadata' => 'nullable|array',
         ];
     }

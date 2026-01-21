@@ -37,31 +37,52 @@ class WithdrawalService
      */
     public function addBankAccount(int $userId, array $data): BankAccount
     {
-        // Check if account already exists for this user
-        $existingAccount = BankAccount::where('user_id', $userId)
-            ->where('account_number', $data['account_number'])
-            ->first();
+        try {
+            // Check if account already exists for this user
+            $existingAccount = BankAccount::where('user_id', $userId)
+                ->where('account_number', $data['account_number'])
+                ->first();
 
-        if ($existingAccount) {
-            throw new \Exception('Bank account already exists');
+            if ($existingAccount) {
+                throw new \Exception('Bank account already exists');
+            }
+
+            // Check if this is the first account for the user (set as default)
+            $hasExistingAccounts = BankAccount::where('user_id', $userId)
+                ->where('is_active', true)
+                ->exists();
+
+            return BankAccount::create([
+                'user_id' => $userId,
+                'bank_name' => $data['bank_name'],
+                'account_number' => $data['account_number'],
+                'account_name' => $data['account_name'],
+                'currency' => $data['currency'] ?? 'NGN',
+                'country_code' => $data['country_code'] ?? 'NG',
+                'is_active' => true,
+                'is_default' => !$hasExistingAccounts, // Set as default if first account
+                'metadata' => $data['metadata'] ?? null,
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Log the actual database error
+            Log::error('Database error while adding bank account', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'sql' => $e->getSql() ?? 'N/A',
+            ]);
+            
+            // Check for unique constraint violation
+            if ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry')) {
+                throw new \Exception('Bank account already exists');
+            }
+            
+            // Re-throw with more context
+            throw new \Exception('Database error: ' . $e->getMessage());
+        } catch (\Exception $e) {
+            // Re-throw other exceptions as-is
+            throw $e;
         }
-
-        // Check if this is the first account for the user (set as default)
-        $hasExistingAccounts = BankAccount::where('user_id', $userId)
-            ->where('is_active', true)
-            ->exists();
-
-        return BankAccount::create([
-            'user_id' => $userId,
-            'bank_name' => $data['bank_name'],
-            'account_number' => $data['account_number'],
-            'account_name' => $data['account_name'],
-            'currency' => $data['currency'] ?? 'NGN',
-            'country_code' => $data['country_code'] ?? 'NG',
-            'is_active' => true,
-            'is_default' => !$hasExistingAccounts, // Set as default if first account
-            'metadata' => $data['metadata'] ?? null,
-        ]);
     }
 
     /**
