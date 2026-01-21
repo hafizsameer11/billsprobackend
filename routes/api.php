@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\WithdrawalController;
 use App\Http\Controllers\Api\SupportController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\CryptoController;
+use App\Http\Controllers\Api\UserController;
 
 /*
 |--------------------------------------------------------------------------
@@ -228,7 +229,18 @@ Route::middleware('auth:sanctum')->group(function () {
     // ========================================================================
     // USER ROUTES
     // ========================================================================
-    Route::get('/user', function (Request $request) {
-        return $request->user();
+    Route::prefix('user')->group(function () {
+        Route::get('/', function (Request $request) {
+            return $request->user();
+        });
+        
+        // Profile routes
+        Route::get('/profile', [UserController::class, 'getProfile']);
+        Route::put('/profile', [UserController::class, 'updateProfile']);
+        
+        // Notification routes
+        Route::get('/notifications', [UserController::class, 'getNotifications']);
+        Route::post('/notifications/{id}/read', [UserController::class, 'markNotificationAsRead']);
+        Route::post('/notifications/read-all', [UserController::class, 'markAllNotificationsAsRead']);
     });
 });

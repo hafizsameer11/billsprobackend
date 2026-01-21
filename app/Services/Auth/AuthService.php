@@ -2,6 +2,7 @@
 
 namespace App\Services\Auth;
 
+use App\Helpers\NotificationHelper;
 use App\Models\User;
 use App\Services\Wallet\WalletService;
 use App\Services\Crypto\CryptoWalletService;
@@ -295,6 +296,18 @@ class AuthService
 
         // Create token
         $token = $user->createToken('auth-token')->plainTextToken;
+
+        // Create login notification
+        try {
+            NotificationHelper::createLoginNotification(
+                $user,
+                request()->ip(),
+                request()->userAgent()
+            );
+        } catch (\Exception $e) {
+            // Log error but don't fail login if notification creation fails
+            \Log::error('Failed to create login notification: ' . $e->getMessage());
+        }
 
         return [
             'success' => true,
