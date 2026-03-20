@@ -18,6 +18,14 @@ class CreateCardRequest extends FormRequest
             'useremail' => 'nullable|email|max:255',
             'firstname' => 'required|string|max:100',
             'lastname' => 'required|string|max:100',
+            'dob' => 'required|date_format:Y-m-d',
+            'address1' => 'required|string|max:255',
+            'city' => 'required|string|max:100',
+            'state' => 'required|string|max:100',
+            'country' => 'required|string|size:2',
+            'phone' => 'required|string|max:20',
+            'countrycode' => 'required|string|max:5',
+            'postalcode' => 'required|string|max:20',
             'card_color' => 'nullable|string|in:green,brown,purple',
             'card_type' => 'nullable|string|in:mastercard,visa',
             'payment_wallet_type' => 'nullable|string|in:naira_wallet,crypto_wallet,provider_balance',
@@ -39,6 +47,14 @@ class CreateCardRequest extends FormRequest
         return [
             'firstname.required' => 'First name is required.',
             'lastname.required' => 'Last name is required.',
+            'dob.required' => 'Date of birth is required.',
+            'address1.required' => 'Address line 1 is required.',
+            'city.required' => 'City is required.',
+            'state.required' => 'State is required.',
+            'country.required' => 'Country is required.',
+            'phone.required' => 'Phone is required.',
+            'countrycode.required' => 'Country code is required.',
+            'postalcode.required' => 'Postal code is required.',
         ];
     }
 }

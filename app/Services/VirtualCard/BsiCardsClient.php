@@ -144,6 +144,8 @@ class BsiCardsClient
             );
         }
 
+        $data['message'] = $this->normalizeMessage($data['message'] ?? null);
+
         return $data;
     }
 

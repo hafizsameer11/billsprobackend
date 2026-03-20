@@ -4631,7 +4631,15 @@
                             "schema": {
                                 "required": [
                                     "firstname",
-                                    "lastname"
+                                    "lastname",
+                                    "dob",
+                                    "address1",
+                                    "city",
+                                    "state",
+                                    "country",
+                                    "phone",
+                                    "countrycode",
+                                    "postalcode"
                                 ],
                                 "properties": {
                                     "firstname": {
@@ -4641,6 +4649,39 @@
                                     "lastname": {
                                         "type": "string",
                                         "example": "Doe"
+                                    },
+                                    "dob": {
+                                        "type": "string",
+                                        "format": "date",
+                                        "example": "1979-12-17"
+                                    },
+                                    "address1": {
+                                        "type": "string",
+                                        "example": "128 city road"
+                                    },
+                                    "postalcode": {
+                                        "type": "string",
+                                        "example": "ec1v2nx"
+                                    },
+                                    "city": {
+                                        "type": "string",
+                                        "example": "london"
+                                    },
+                                    "country": {
+                                        "type": "string",
+                                        "example": "GB"
+                                    },
+                                    "state": {
+                                        "type": "string",
+                                        "example": "london"
+                                    },
+                                    "countrycode": {
+                                        "type": "string",
+                                        "example": "44"
+                                    },
+                                    "phone": {
+                                        "type": "string",
+                                        "example": "911266016115"
                                     },
                                     "useremail": {
                                         "type": "string",

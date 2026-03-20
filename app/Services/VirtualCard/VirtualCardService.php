@@ -22,6 +22,14 @@ class VirtualCardService
             'useremail' => $data['useremail'] ?? $user->email,
             'firstname' => $data['firstname'] ?? $user->first_name ?? explode(' ', (string) $user->name)[0] ?? 'User',
             'lastname' => $data['lastname'] ?? $user->last_name ?? trim(str_replace(($user->first_name ?? ''), '', (string) $user->name)) ?: 'Cardholder',
+            'dob' => $data['dob'],
+            'address1' => $data['address1'],
+            'postalcode' => $data['postalcode'],
+            'city' => $data['city'],
+            'country' => $data['country'],
+            'state' => $data['state'],
+            'countrycode' => $data['countrycode'],
+            'phone' => $data['phone'],
         ];
 
         try {
