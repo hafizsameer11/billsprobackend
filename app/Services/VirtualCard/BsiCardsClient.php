@@ -132,8 +132,9 @@ class BsiCardsClient
         }
 
         if (!$response->ok()) {
+            $message = $this->normalizeMessage($data['message'] ?? null);
             throw new BsiCardsApiException(
-                $data['message'] ?? 'BSICards request failed.',
+                $message,
                 $response->status(),
                 [
                     'endpoint_key' => $endpointKey,
@@ -144,6 +145,33 @@ class BsiCardsClient
         }
 
         return $data;
+    }
+
+    protected function normalizeMessage(mixed $rawMessage): string
+    {
+        if (is_string($rawMessage) && $rawMessage !== '') {
+            return $rawMessage;
+        }
+
+        if (is_array($rawMessage)) {
+            $flattened = [];
+            array_walk_recursive($rawMessage, static function ($value) use (&$flattened): void {
+                if (is_scalar($value)) {
+                    $flattened[] = (string) $value;
+                }
+            });
+
+            if ($flattened !== []) {
+                return implode('; ', $flattened);
+            }
+
+            $encoded = json_encode($rawMessage);
+            if (is_string($encoded) && $encoded !== '') {
+                return $encoded;
+            }
+        }
+
+        return 'BSICards request failed.';
     }
 
     protected function buildUrl(string $baseUrl, string $path): string
