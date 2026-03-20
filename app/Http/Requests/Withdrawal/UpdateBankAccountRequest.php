@@ -23,6 +23,7 @@ class UpdateBankAccountRequest extends FormRequest
     {
         return [
             'bank_name' => 'sometimes|string|max:255',
+            'bank_code' => 'sometimes|nullable|string|max:32',
             'account_number' => 'sometimes|string|max:50',
             'account_name' => 'sometimes|string|max:255',
             'currency' => 'sometimes|string|size:3',

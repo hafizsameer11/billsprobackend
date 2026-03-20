@@ -4,14 +4,12 @@ namespace App\Services\Deposit;
 
 use App\Models\BankAccount;
 use App\Models\Deposit;
-use App\Models\Transaction;
 use App\Models\FiatWallet;
-use App\Services\Transaction\TransactionService;
+use App\Models\Transaction;
 use Illuminate\Support\Facades\DB;
 
 class DepositService
 {
-
     /**
      * Get active bank account for deposits
      */
@@ -35,7 +33,7 @@ class DepositService
         // Get bank account for deposit
         $bankAccount = $this->getDepositBankAccount($data['currency'] ?? 'NGN', $data['country_code'] ?? 'NG');
 
-        if (!$bankAccount) {
+        if (! $bankAccount) {
             return [
                 'success' => false,
                 'message' => 'No active bank account found for deposits',
@@ -85,12 +83,20 @@ class DepositService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$deposit) {
+            if (! $deposit) {
                 return [
                     'success' => false,
                     'message' => 'Deposit not found or already processed',
                 ];
             }
+
+            if ($deposit->payment_method === 'palmpay') {
+                return [
+                    'success' => false,
+                    'message' => 'PalmPay deposits are credited automatically when payment completes. Use GET /api/deposit/palmpay/status/{depositReference} or wait for the webhook.',
+                ];
+            }
+
             // Update deposit status
             $deposit->update([
                 'status' => 'completed',

@@ -3,16 +3,20 @@
 namespace App\Services\Auth;
 
 use App\Helpers\NotificationHelper;
+use App\Jobs\ProvisionUserCryptoDepositAddressesJob;
 use App\Models\User;
-use App\Services\Wallet\WalletService;
 use App\Services\Crypto\CryptoWalletService;
-use Illuminate\Support\Facades\Hash;
+use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class AuthService
 {
     protected OtpService $otpService;
+
     protected WalletService $walletService;
+
     protected CryptoWalletService $cryptoWalletService;
 
     public function __construct(
@@ -47,7 +51,7 @@ class AuthService
 
         // Create user
         $user = User::create([
-            'name' => trim(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? '')),
+            'name' => trim(($data['first_name'] ?? '').' '.($data['last_name'] ?? '')),
             'first_name' => $data['first_name'] ?? null,
             'last_name' => $data['last_name'] ?? null,
             'email' => $data['email'],
@@ -77,7 +81,7 @@ class AuthService
     {
         $user = User::where('email', $email)->first();
 
-        if (!$user) {
+        if (! $user) {
             return [
                 'success' => false,
                 'message' => 'User not found',
@@ -94,22 +98,26 @@ class AuthService
         // Verify OTP
         $otpResult = $this->otpService->verifyOtp($otp, $email, null, 'email');
 
-        if (!$otpResult['success']) {
+        if (! $otpResult['success']) {
             return $otpResult;
         }
 
         // Mark email as verified
         $user->update(['email_verified' => true]);
 
-        // Create wallets in a transaction
+        // Create wallets in a transaction; then queue Tatum deposit provisioning (after commit).
         DB::transaction(function () use ($user) {
             // Create fiat wallet (NGN for Nigeria only)
             if ($user->country_code === 'NG') {
                 $this->walletService->createFiatWallet($user->id, 'NGN', 'NG');
             }
 
-            // Create crypto wallets (virtual accounts)
+            // Create crypto wallets (virtual accounts — ledger rows)
             $this->cryptoWalletService->initializeUserCryptoWallets($user->id);
+
+            DB::afterCommit(function () use ($user) {
+                ProvisionUserCryptoDepositAddressesJob::dispatch($user->id);
+            });
         });
 
         // Generate authentication token for the user
@@ -126,7 +134,7 @@ class AuthService
     /**
      * Resend OTP
      */
-    public function resendOtp(string $email = null, string $phoneNumber = null, string $type = 'email'): array
+    public function resendOtp(?string $email = null, ?string $phoneNumber = null, string $type = 'email'): array
     {
         return $this->otpService->sendOtp($email, $phoneNumber, $type);
     }
@@ -136,7 +144,7 @@ class AuthService
      */
     public function setPin(User $user, string $pin): array
     {
-        if (strlen($pin) !== 4 || !ctype_digit($pin)) {
+        if (strlen($pin) !== 4 || ! ctype_digit($pin)) {
             return [
                 'success' => false,
                 'message' => 'PIN must be 4 digits',
@@ -158,7 +166,7 @@ class AuthService
     {
         return [
             'success' => true,
-            'pin_set' => !empty($user->pin),
+            'pin_set' => ! empty($user->pin),
             'message' => $user->pin ? 'PIN is set' : 'PIN is not set',
         ];
     }
@@ -168,7 +176,7 @@ class AuthService
      */
     public function verifyPin(User $user, string $pin): bool
     {
-        if (!$user->pin) {
+        if (! $user->pin) {
             return false;
         }
 
@@ -182,7 +190,7 @@ class AuthService
     {
         $user = User::where('email', $email)->first();
 
-        if (!$user) {
+        if (! $user) {
             return [
                 'success' => false,
                 'message' => 'No account found with this email address',
@@ -206,7 +214,7 @@ class AuthService
     {
         $user = User::where('email', $email)->first();
 
-        if (!$user) {
+        if (! $user) {
             return [
                 'success' => false,
                 'message' => 'User not found',
@@ -216,7 +224,7 @@ class AuthService
         // Check if OTP is valid (without marking as verified)
         $isValid = $this->otpService->isValidOtp($otp, $email, null, 'email');
 
-        if (!$isValid) {
+        if (! $isValid) {
             return [
                 'success' => false,
                 'message' => 'Invalid or expired OTP',
@@ -236,7 +244,7 @@ class AuthService
     {
         $user = User::where('email', $email)->first();
 
-        if (!$user) {
+        if (! $user) {
             return [
                 'success' => false,
                 'message' => 'User not found',
@@ -246,7 +254,7 @@ class AuthService
         // Verify OTP first
         $otpResult = $this->otpService->verifyOtp($otp, $email, null, 'email');
 
-        if (!$otpResult['success']) {
+        if (! $otpResult['success']) {
             return [
                 'success' => false,
                 'message' => 'Invalid or expired OTP',
@@ -271,7 +279,7 @@ class AuthService
     {
         $user = User::where('email', $email)->first();
 
-        if (!$user) {
+        if (! $user) {
             return [
                 'success' => false,
                 'message' => 'Invalid credentials',
@@ -279,7 +287,7 @@ class AuthService
         }
 
         // Check password
-        if (!Hash::check($password, $user->password)) {
+        if (! Hash::check($password, $user->password)) {
             return [
                 'success' => false,
                 'message' => 'Invalid credentials',
@@ -287,7 +295,7 @@ class AuthService
         }
 
         // Check if email is verified
-        if (!$user->email_verified) {
+        if (! $user->email_verified) {
             return [
                 'success' => false,
                 'message' => 'Please verify your email before logging in',
@@ -305,8 +313,9 @@ class AuthService
                 request()->userAgent()
             );
         } catch (\Exception $e) {
+
             // Log error but don't fail login if notification creation fails
-            \Log::error('Failed to create login notification: ' . $e->getMessage());
+            Log::error('Failed to create login notification: '.$e->getMessage());
         }
 
         return [

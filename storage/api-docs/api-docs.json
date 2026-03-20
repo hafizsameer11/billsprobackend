@@ -2,7 +2,7 @@
     "openapi": "3.0.0",
     "info": {
         "title": "Bill's Pro API",
-        "description": "API documentation for Bill's Pro - Crypto and Bill Payment System",
+        "description": "Bill's Pro API: fiat/crypto wallets, bill payments, KYC, and **Virtual Cards (Merchant Digital Master / BSICards)**. See tag **Virtual Cards** for creation fees (`VIRTUAL_CARD_*` env) and provider-linked routes.",
         "contact": {
             "name": "API Support",
             "email": "support@billspro.com"
@@ -2173,33 +2173,33 @@
                     "Crypto"
                 ],
                 "summary": "Get deposit address",
-                "description": "Get deposit address for receiving crypto.",
+                "description": "Returns the persisted on-chain deposit address for this currency/blockchain. Default: created with **Tatum** (user wallet + address + V4 webhook subscription). Mock strings are used only when env `TATUM_USE_MOCK=true`. Response envelope is unchanged: `success`, `message`, `data`.",
                 "operationId": "ab41ae1ff13243103f7bd54de1d083e0",
                 "parameters": [
                     {
                         "name": "currency",
                         "in": "query",
-                        "description": "Currency code",
+                        "description": "Currency code (must match wallet_currencies / virtual_accounts)",
                         "required": true,
                         "schema": {
                             "type": "string",
-                            "example": "BTC"
+                            "example": "ETH"
                         }
                     },
                     {
                         "name": "blockchain",
                         "in": "query",
-                        "description": "Blockchain",
+                        "description": "Blockchain key (must match virtual_accounts.blockchain)",
                         "required": true,
                         "schema": {
                             "type": "string",
-                            "example": "BTC"
+                            "example": "ethereum"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Deposit address retrieved successfully",
+                        "description": "Standard success envelope with `data` unchanged for mobile/web clients.",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2208,7 +2208,38 @@
                                             "type": "boolean",
                                             "example": true
                                         },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Deposit address retrieved successfully."
+                                        },
                                         "data": {
+                                            "properties": {
+                                                "currency": {
+                                                    "type": "string",
+                                                    "example": "ETH"
+                                                },
+                                                "blockchain": {
+                                                    "type": "string",
+                                                    "example": "ethereum"
+                                                },
+                                                "network": {
+                                                    "description": "Alias of blockchain for clients that expect a network label",
+                                                    "type": "string",
+                                                    "example": "ethereum"
+                                                },
+                                                "deposit_address": {
+                                                    "description": "On-chain address from Tatum (or dev-only mock)",
+                                                    "type": "string"
+                                                },
+                                                "qr_code": {
+                                                    "description": "Same value as deposit_address for QR encoding",
+                                                    "type": "string"
+                                                },
+                                                "account_id": {
+                                                    "description": "Internal virtual_accounts.id",
+                                                    "type": "integer"
+                                                }
+                                            },
                                             "type": "object"
                                         }
                                     },
@@ -2218,7 +2249,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid request"
+                        "description": "Missing query params, account not found, or Tatum/configuration error"
                     },
                     "401": {
                         "description": "Unauthenticated"
@@ -2237,7 +2268,7 @@
                     "Crypto"
                 ],
                 "summary": "Get exchange rate",
-                "description": "Get exchange rate for buying or selling crypto.",
+                "description": "Get exchange rate for buying or selling crypto. Pass `blockchain` when the crypto symbol exists on multiple chains (e.g. USDT on tron vs ethereum).",
                 "operationId": "c6b2290b570e1fcbbfcabf0000942020",
                 "parameters": [
                     {
@@ -2268,6 +2299,16 @@
                         "schema": {
                             "type": "number",
                             "example": 1000
+                        }
+                    },
+                    {
+                        "name": "blockchain",
+                        "in": "query",
+                        "description": "Normalized chain (e.g. tron, ethereum) — required for multi-chain tokens like USDT",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "example": "tron"
                         }
                     }
                 ],
@@ -2340,11 +2381,10 @@
                                         "example": 1000
                                     },
                                     "payment_method": {
-                                        "description": "Payment method",
+                                        "description": "Debit NGN fiat wallet (fund via PalmPay deposit first)",
                                         "type": "string",
                                         "enum": [
-                                            "naira",
-                                            "crypto_wallet"
+                                            "naira"
                                         ],
                                         "example": "naira"
                                     }
@@ -2423,11 +2463,10 @@
                                         "example": 1000
                                     },
                                     "payment_method": {
-                                        "description": "Payment method",
+                                        "description": "Debit NGN fiat wallet",
                                         "type": "string",
                                         "enum": [
-                                            "naira",
-                                            "crypto_wallet"
+                                            "naira"
                                         ],
                                         "example": "naira"
                                     }
@@ -2625,7 +2664,7 @@
                     "Crypto"
                 ],
                 "summary": "Send crypto",
-                "description": "Send crypto to an external address.",
+                "description": "Debits the user virtual account; on-chain transfer is intended from the platform master/hot wallet (pending tx until broadcast).",
                 "operationId": "b621b9433e9f426c1319d99fbcda86b6",
                 "requestBody": {
                     "required": true,
@@ -2748,7 +2787,7 @@
                     "Deposit"
                 ],
                 "summary": "Get deposit bank account",
-                "description": "Get bank account details for making deposits.",
+                "description": "Legacy: merchant bank account for manual transfer. When PalmPay fiat deposits are active, use POST /api/deposit/initiate for a virtual account instead.",
                 "operationId": "77c4451842b7e673d62bba1138918063",
                 "parameters": [
                     {
@@ -2799,7 +2838,7 @@
                     "Deposit"
                 ],
                 "summary": "Initiate deposit",
-                "description": "Initiate a deposit request and get bank account details for payment.",
+                "description": "Creates a deposit and returns payment details. Uses PalmPay checkout/virtual account when configured; otherwise the legacy merchant bank account flow.",
                 "operationId": "8c716e49e5905fbca5a77b1c93e23de7",
                 "requestBody": {
                     "required": true,
@@ -2883,7 +2922,7 @@
                     "Deposit"
                 ],
                 "summary": "Confirm deposit payment",
-                "description": "Confirm that payment has been made and credit the user's wallet.",
+                "description": "Manual confirmation for legacy merchant-bank transfers. PalmPay deposits credit automatically via webhook; this endpoint returns an error for payment_method=palmpay.",
                 "operationId": "164d7f40d54c18e4608c152bc02fa9a4",
                 "requestBody": {
                     "required": true,
@@ -4581,8 +4620,8 @@
                 "tags": [
                     "Virtual Cards"
                 ],
-                "summary": "Get user's virtual cards",
-                "description": "Get all active virtual cards for the authenticated user.",
+                "summary": "List virtual cards",
+                "description": "Returns cached merchant digital master cards for the user and syncs with the provider when possible.",
                 "operationId": "99ca84c76187e54ba3224e8add2f49e0",
                 "responses": {
                     "200": {
@@ -4621,8 +4660,8 @@
                 "tags": [
                     "Virtual Cards"
                 ],
-                "summary": "Create virtual card",
-                "description": "Create a merchant digital master virtual card via provider.",
+                "summary": "Create merchant digital master card",
+                "description": "Issues a BSICards Digital Master card. **Wallet fee (required):** send `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. Naira fee (NGN) = `VIRTUAL_CARD_CREATION_FEE_USD` × `VIRTUAL_CARD_USD_TO_NGN_RATE` + `VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN`. Crypto fee (USD equivalent) matches the same total. Balance is checked **before** calling the provider; fee is debited **after** successful issue. **Provider KYC/identity fields** (required): `dob`, `address1`, `postalcode`, `city`, `state`, `country` (ISO-3166 alpha-2), `countrycode`, `phone`.",
                 "operationId": "3c5278ce0513afc80c49f302df082d37",
                 "requestBody": {
                     "required": true,
@@ -4639,7 +4678,8 @@
                                     "country",
                                     "phone",
                                     "countrycode",
-                                    "postalcode"
+                                    "postalcode",
+                                    "payment_wallet_type"
                                 ],
                                 "properties": {
                                     "firstname": {
@@ -4651,6 +4691,7 @@
                                         "example": "Doe"
                                     },
                                     "dob": {
+                                        "description": "YYYY-MM-DD",
                                         "type": "string",
                                         "format": "date",
                                         "example": "1979-12-17"
@@ -4668,6 +4709,7 @@
                                         "example": "london"
                                     },
                                     "country": {
+                                        "description": "ISO-3166 alpha-2",
                                         "type": "string",
                                         "example": "GB"
                                     },
@@ -4676,14 +4718,32 @@
                                         "example": "london"
                                     },
                                     "countrycode": {
+                                        "description": "Phone country code without +",
                                         "type": "string",
                                         "example": "44"
                                     },
                                     "phone": {
+                                        "description": "Digits (per provider sample)",
                                         "type": "string",
                                         "example": "911266016115"
                                     },
+                                    "payment_wallet_type": {
+                                        "description": "Where to debit the card creation fee",
+                                        "type": "string",
+                                        "enum": [
+                                            "naira_wallet",
+                                            "crypto_wallet"
+                                        ],
+                                        "example": "naira_wallet"
+                                    },
+                                    "payment_wallet_currency": {
+                                        "description": "Fiat wallet currency when using naira_wallet (default NGN)",
+                                        "type": "string",
+                                        "example": "NGN",
+                                        "nullable": true
+                                    },
                                     "useremail": {
+                                        "description": "Overrides user email sent to provider",
                                         "type": "string",
                                         "format": "email",
                                         "example": "merchantuser@billspro.hmstech.org",
@@ -4702,21 +4762,6 @@
                                             "purple"
                                         ],
                                         "example": "green",
-                                        "nullable": true
-                                    },
-                                    "payment_wallet_type": {
-                                        "type": "string",
-                                        "enum": [
-                                            "naira_wallet",
-                                            "crypto_wallet",
-                                            "provider_balance"
-                                        ],
-                                        "example": "provider_balance",
-                                        "nullable": true
-                                    },
-                                    "payment_wallet_currency": {
-                                        "type": "string",
-                                        "example": "USD",
                                         "nullable": true
                                     },
                                     "billing_address_street": {
@@ -4741,13 +4786,28 @@
                                     }
                                 },
                                 "type": "object"
+                            },
+                            "example": {
+                                "firstname": "John",
+                                "lastname": "Doe",
+                                "dob": "1979-12-17",
+                                "address1": "128 city road",
+                                "postalcode": "ec1v2nx",
+                                "city": "london",
+                                "country": "GB",
+                                "state": "london",
+                                "countrycode": "44",
+                                "phone": "911266016115",
+                                "payment_wallet_type": "naira_wallet",
+                                "payment_wallet_currency": "NGN",
+                                "useremail": "merchantuser@billspro.hmstech.org"
                             }
                         }
                     }
                 },
                 "responses": {
                     "200": {
-                        "description": "Card created successfully",
+                        "description": "Card issued; `data` includes `card`, `provider_response`, `transaction`, and `fee_charged` (amount/currency/payment_wallet_type).",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -4755,6 +4815,10 @@
                                         "success": {
                                             "type": "boolean",
                                             "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Card Issued Success"
                                         },
                                         "data": {
                                             "type": "object"
@@ -4766,13 +4830,13 @@
                         }
                     },
                     "400": {
-                        "description": "Insufficient balance or invalid request"
+                        "description": "Insufficient wallet balance for creation fee, or provider rejected request"
                     },
                     "401": {
                         "description": "Unauthenticated"
                     },
                     "422": {
-                        "description": "Validation error"
+                        "description": "Validation error or provider card id could not be resolved"
                     }
                 },
                 "security": [
@@ -4788,7 +4852,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get card details",
-                "description": "Get detailed information about a specific virtual card including card number, CVV, and expiry.",
+                "description": "Fetches merchant digital master card details; refreshes from provider when possible. May include masked PAN/CVV in local cache.",
                 "operationId": "62b7a35f3044a434e872c5281c9abe72",
                 "parameters": [
                     {
@@ -4842,13 +4906,13 @@
                     "Virtual Cards"
                 ],
                 "summary": "Fund virtual card",
-                "description": "Fund merchant digital master virtual card via provider endpoint.",
+                "description": "Calls BSICards merchant fund endpoint (`BSICARDS_MERCHANT_MASTER_FUND_PATH`). `amount` is sent to the provider; optional `useremail` overrides the authenticated user email. `payment_wallet_type` is optional metadata (fund is charged by provider / merchant balance, not debited from app naira/crypto in this flow).",
                 "operationId": "6cd62438a0ea7afa8785acc314a77333",
                 "parameters": [
                     {
                         "name": "id",
                         "in": "path",
-                        "description": "Card ID",
+                        "description": "Local virtual card id",
                         "required": true,
                         "schema": {
                             "type": "integer",
@@ -4866,25 +4930,25 @@
                                 ],
                                 "properties": {
                                     "amount": {
-                                        "description": "Amount to fund",
+                                        "description": "Fund amount (provider rules apply)",
                                         "type": "number",
                                         "format": "float",
                                         "example": 50
                                     },
                                     "useremail": {
+                                        "description": "Email sent as useremail to provider",
                                         "type": "string",
                                         "format": "email",
-                                        "example": "merchantuser@billspro.hmstech.org",
                                         "nullable": true
                                     },
                                     "payment_wallet_type": {
+                                        "description": "Optional label for client tracking",
                                         "type": "string",
                                         "enum": [
                                             "naira_wallet",
                                             "crypto_wallet",
                                             "provider_balance"
                                         ],
-                                        "example": "provider_balance",
                                         "nullable": true
                                     },
                                     "payment_wallet_currency": {
@@ -4894,6 +4958,10 @@
                                     }
                                 },
                                 "type": "object"
+                            },
+                            "example": {
+                                "amount": 50,
+                                "useremail": "user@billspro.hmstech.org"
                             }
                         }
                     }
@@ -4919,7 +4987,7 @@
                         }
                     },
                     "400": {
-                        "description": "Insufficient balance"
+                        "description": "Provider error, insufficient merchant balance, or misconfigured fund path"
                     },
                     "401": {
                         "description": "Unauthenticated"
@@ -5019,7 +5087,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get card transactions",
-                "description": "Get transaction history for a specific virtual card.",
+                "description": "Merges provider card transactions (when available) with local `virtual_card_transactions` cache.",
                 "operationId": "4896f92d21a11d96c5c6edd97b58bf2b",
                 "parameters": [
                     {
@@ -5083,7 +5151,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get card billing address",
-                "description": "Get billing address for a virtual card.",
+                "description": "Returns locally stored billing fields on the virtual card record (not necessarily synced from provider).",
                 "operationId": "730efb8dcecae07612a4792394709b98",
                 "parameters": [
                     {
@@ -5135,7 +5203,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Update card billing address",
-                "description": "Update billing address for a virtual card.",
+                "description": "Updates local billing fields only; does not call BSICards unless you add that integration.",
                 "operationId": "2e815c5c206dbf101eab13f8c07587ed",
                 "parameters": [
                     {
@@ -5221,7 +5289,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get card limits",
-                "description": "Get spending and transaction limits for a virtual card.",
+                "description": "App-level spending/transaction limits stored on the local card row.",
                 "operationId": "2af933dc09b7cb12d4b08f7a53ce7ab9",
                 "parameters": [
                     {
@@ -5273,7 +5341,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Update card limits",
-                "description": "Update spending and transaction limits for a virtual card.",
+                "description": "Updates local limit fields only; provider-side limits may differ.",
                 "operationId": "96273ce938282619e232156c2460ef01",
                 "parameters": [
                     {
@@ -5357,8 +5425,8 @@
                 "tags": [
                     "Virtual Cards"
                 ],
-                "summary": "Freeze virtual card",
-                "description": "Freeze a virtual card to make it inactive. Requires support to unfreeze.",
+                "summary": "Block (freeze) card",
+                "description": "Calls provider **block digital** (`blockdigital`); sets local `is_frozen`.",
                 "operationId": "6743220952034d97e504f55b3cb2010b",
                 "parameters": [
                     {
@@ -5415,8 +5483,8 @@
                 "tags": [
                     "Virtual Cards"
                 ],
-                "summary": "Unfreeze virtual card",
-                "description": "Unfreeze a virtual card to make it active again.",
+                "summary": "Unblock (unfreeze) card",
+                "description": "Calls provider **unblock digital** (`unblockdigital`); clears local `is_frozen`.",
                 "operationId": "ebf6f1dfc6944c87fbb8902fee47228b",
                 "parameters": [
                     {
@@ -5474,7 +5542,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Terminate virtual card",
-                "description": "Terminate a virtual card through provider API.",
+                "description": "Calls provider **terminate digital** (`terminatedigital`); marks local card inactive.",
                 "operationId": "7d738855d24212af4c90283d253358b5",
                 "parameters": [
                     {
@@ -5491,6 +5559,9 @@
                 "responses": {
                     "200": {
                         "description": "Card terminated successfully"
+                    },
+                    "400": {
+                        "description": "Provider error or missing provider_card_id"
                     },
                     "401": {
                         "description": "Unauthenticated"
@@ -6206,7 +6277,7 @@
                     "Withdrawal"
                 ],
                 "summary": "Process withdrawal",
-                "description": "Process a withdrawal to a bank account. Requires PIN verification.",
+                "description": "When PalmPay is configured (PALMPAY_APP_ID, PALMPAY_PRIVATE_KEY, PALMPAY_WEBHOOK_URL), debits the wallet and calls PalmPay merchant payout to the saved bank account. The bank account must include bank_code (PalmPay bank code). Set PALMPAY_LEGACY_INTERNAL_WITHDRAWAL=true for the old ledger-only behaviour.",
                 "operationId": "c445c451c3ed35fb1539c3a8cf9397ec",
                 "requestBody": {
                     "required": true,
@@ -6416,6 +6487,14 @@
     },
     "tags": [
         {
+            "name": "Crypto",
+            "description": "Crypto virtual accounts: balances, on-chain deposit addresses via Tatum (default), buy/sell, and send. Deposit responses keep the same JSON shape (`success`, `message`, `data` with `deposit_address`, `qr_code`, `account_id`, etc.). Use `TATUM_USE_MOCK=true` only for local dev without Tatum."
+        },
+        {
+            "name": "Virtual Cards",
+            "description": "Merchant Digital Master (BSICards). **Create** debits your in-app wallet (`naira_wallet` or `crypto_wallet`) using `VIRTUAL_CARD_*` env fees, then calls the provider. **Fund / freeze / unfreeze / terminate / 3DS / OTP** call BSICards merchant endpoints. Responses may include `provider_payload` and `fee_charged` on create."
+        },
+        {
             "name": "Authentication",
             "description": "Authentication"
         },
@@ -6426,10 +6505,6 @@
         {
             "name": "Support",
             "description": "Support"
-        },
-        {
-            "name": "Crypto",
-            "description": "Crypto"
         },
         {
             "name": "Dashboard",
@@ -6450,10 +6525,6 @@
         {
             "name": "User",
             "description": "User"
-        },
-        {
-            "name": "Virtual Cards",
-            "description": "Virtual Cards"
         },
         {
             "name": "Wallet",

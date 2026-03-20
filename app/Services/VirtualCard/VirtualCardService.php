@@ -2,15 +2,22 @@
 
 namespace App\Services\VirtualCard;
 
+use App\Models\FiatWallet;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
-use App\Models\User;
+use App\Services\Crypto\CryptoWalletService;
+use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 
 class VirtualCardService
 {
-    public function __construct(protected BsiCardsClient $bsiCardsClient) {}
+    public function __construct(
+        protected BsiCardsClient $bsiCardsClient,
+        protected WalletService $walletService,
+        protected CryptoWalletService $cryptoWalletService,
+    ) {}
 
     /**
      * Create provider-backed merchant digital master card
@@ -18,6 +25,37 @@ class VirtualCardService
     public function createCard(int $userId, array $data): array
     {
         $user = User::findOrFail($userId);
+        $paymentWalletType = (string) ($data['payment_wallet_type'] ?? '');
+        $fiatCurrency = (string) ($data['payment_wallet_currency'] ?? 'NGN');
+
+        $feeNgn = $this->computeCreationFeeNgn();
+        $feeUsd = $this->computeCreationFeeUsd();
+
+        if ($paymentWalletType === 'naira_wallet') {
+            $wallet = $this->walletService->getFiatWallet($userId, $fiatCurrency, 'NG');
+            if (! $wallet || (float) $wallet->balance < $feeNgn) {
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient Naira wallet balance for card creation fee.',
+                    'status' => 400,
+                ];
+            }
+        } elseif ($paymentWalletType === 'crypto_wallet') {
+            if ($this->cryptoWalletService->getTotalCryptoBalanceInUsd($userId) + 0.0000001 < $feeUsd) {
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient crypto wallet balance for card creation fee.',
+                    'status' => 400,
+                ];
+            }
+        } else {
+            return [
+                'success' => false,
+                'message' => 'Select naira_wallet or crypto_wallet to pay the card creation fee.',
+                'status' => 422,
+            ];
+        }
+
         $payload = [
             'useremail' => $data['useremail'] ?? $user->email,
             'firstname' => $data['firstname'] ?? $user->first_name ?? explode(' ', (string) $user->name)[0] ?? 'User',
@@ -43,7 +81,7 @@ class VirtualCardService
         }
 
         $resolvedProviderCardId = $this->extractProviderCardId($response);
-        if (!$resolvedProviderCardId) {
+        if (! $resolvedProviderCardId) {
             $resolvedProviderCardId = $this->resolveProviderCardIdFromList(
                 (string) $payload['useremail'],
                 (string) $payload['firstname'],
@@ -51,7 +89,7 @@ class VirtualCardService
             );
         }
 
-        if (!$resolvedProviderCardId) {
+        if (! $resolvedProviderCardId) {
             return [
                 'success' => false,
                 'message' => 'Card was issued but provider card ID could not be resolved. Please verify provider get-all endpoint payload and mapping.',
@@ -59,61 +97,118 @@ class VirtualCardService
             ];
         }
 
-        return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId) {
-            $providerCardId = $resolvedProviderCardId;
-            $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
+        try {
+            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd) {
+                $providerCardId = $resolvedProviderCardId;
+                $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
 
-            $card = VirtualCard::updateOrCreate(
-                ['provider_card_id' => $providerCardId, 'user_id' => $userId],
-                [
-                    'card_name' => $cardSnapshot['card_name'],
-                    'card_number' => $cardSnapshot['card_number'],
-                    'cvv' => $cardSnapshot['cvv'],
-                    'expiry_month' => $cardSnapshot['expiry_month'],
-                    'expiry_year' => $cardSnapshot['expiry_year'],
-                    'card_type' => 'mastercard',
-                    'provider' => 'bsicards',
-                    'provider_status' => $this->extractStatus($response),
-                    'card_color' => 'green',
-                    'currency' => 'USD',
-                    'balance' => $this->extractBalance($response),
-                    'is_active' => true,
-                    'is_frozen' => false,
+                if ($paymentWalletType === 'naira_wallet') {
+                    $wallet = FiatWallet::where('user_id', $userId)
+                        ->where('currency', $fiatCurrency)
+                        ->where('country_code', 'NG')
+                        ->lockForUpdate()
+                        ->first();
+                    if (! $wallet || (float) $wallet->balance < $feeNgn) {
+                        throw new \RuntimeException('Insufficient Naira wallet balance for card creation fee.');
+                    }
+                    $wallet->decrement('balance', $feeNgn);
+                } else {
+                    $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $feeUsd);
+                    if (! $deduct['success']) {
+                        throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct card creation fee from crypto wallet.');
+                    }
+                }
+
+                $card = VirtualCard::updateOrCreate(
+                    ['provider_card_id' => $providerCardId, 'user_id' => $userId],
+                    [
+                        'card_name' => $cardSnapshot['card_name'],
+                        'card_number' => $cardSnapshot['card_number'],
+                        'cvv' => $cardSnapshot['cvv'],
+                        'expiry_month' => $cardSnapshot['expiry_month'],
+                        'expiry_year' => $cardSnapshot['expiry_year'],
+                        'card_type' => 'mastercard',
+                        'provider' => 'bsicards',
+                        'provider_status' => $this->extractStatus($response),
+                        'card_color' => 'green',
+                        'currency' => 'USD',
+                        'balance' => $this->extractBalance($response),
+                        'is_active' => true,
+                        'is_frozen' => false,
+                        'metadata' => [
+                            'source' => 'provider',
+                            'payment_wallet_type' => $paymentWalletType,
+                            'creation_fee_ngn' => $feeNgn,
+                            'creation_fee_usd' => $feeUsd,
+                        ],
+                        'provider_payload' => $response,
+                    ]
+                );
+
+                $txCurrency = $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD';
+                $txFeeAmount = $paymentWalletType === 'naira_wallet' ? $feeNgn : $feeUsd;
+
+                $transaction = Transaction::create([
+                    'user_id' => $userId,
+                    'transaction_id' => Transaction::generateTransactionId(),
+                    'type' => 'card_creation',
+                    'category' => 'virtual_card',
+                    'status' => 'completed',
+                    'currency' => $txCurrency,
+                    'amount' => 0,
+                    'fee' => $txFeeAmount,
+                    'total_amount' => $txFeeAmount,
+                    'reference' => 'CARD'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                    'description' => 'Merchant digital master card creation fee',
                     'metadata' => [
-                        'source' => 'provider',
+                        'card_id' => $card->id,
+                        'provider_card_id' => $providerCardId,
+                        'payment_wallet_type' => $paymentWalletType,
+                        'fee_ngn_equivalent' => $feeNgn,
+                        'fee_usd_equivalent' => $feeUsd,
                     ],
-                    'provider_payload' => $response,
-                ]
-            );
+                ]);
 
-            $transaction = Transaction::create([
-                'user_id' => $userId,
-                'transaction_id' => Transaction::generateTransactionId(),
-                'type' => 'card_creation',
-                'category' => 'virtual_card',
-                'status' => 'completed',
-                'currency' => 'USD',
-                'amount' => 0,
-                'fee' => 0,
-                'total_amount' => 0,
-                'reference' => 'CARD' . strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
-                'description' => 'Merchant digital master card created via provider',
-                'metadata' => [
-                    'card_id' => $card->id,
-                    'provider_card_id' => $providerCardId,
-                ],
-            ]);
-
+                return [
+                    'success' => true,
+                    'message' => $response['message'] ?? 'Virtual card created successfully',
+                    'data' => [
+                        'card' => $card->fresh(),
+                        'provider_response' => $response,
+                        'transaction' => $transaction,
+                        'fee_charged' => [
+                            'payment_wallet_type' => $paymentWalletType,
+                            'amount' => $txFeeAmount,
+                            'currency' => $txCurrency,
+                        ],
+                    ],
+                ];
+            });
+        } catch (\RuntimeException $e) {
             return [
-                'success' => true,
-                'message' => $response['message'] ?? 'Virtual card created successfully',
-                'data' => [
-                    'card' => $card->fresh(),
-                    'provider_response' => $response,
-                    'transaction' => $transaction,
-                ],
+                'success' => false,
+                'message' => $e->getMessage(),
+                'status' => 400,
             ];
-        });
+        }
+    }
+
+    protected function computeCreationFeeNgn(): float
+    {
+        $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
+        $processing = (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
+        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+
+        return ($usd * $rate) + $processing;
+    }
+
+    protected function computeCreationFeeUsd(): float
+    {
+        $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
+        $processingNgn = (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
+        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+
+        return $usd + ($processingNgn / max($rate, 0.0001));
     }
 
     /**
@@ -125,7 +220,7 @@ class VirtualCardService
             ->where('user_id', $userId)
             ->firstOrFail();
 
-        if (!$card->provider_card_id) {
+        if (! $card->provider_card_id) {
             return [
                 'success' => false,
                 'message' => 'This card is missing provider metadata and cannot be funded.',
@@ -148,6 +243,7 @@ class VirtualCardService
             } else {
                 $message = $exception->getMessage();
             }
+
             return [
                 'success' => false,
                 'message' => $message,
@@ -177,7 +273,7 @@ class VirtualCardService
                 'amount' => (float) $data['amount'],
                 'fee' => 0,
                 'total_amount' => (float) $data['amount'],
-                'reference' => 'FUND' . strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                'reference' => 'FUND'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
                 'description' => "Fund merchant digital master card with {$data['amount']} USD",
                 'metadata' => [
                     'card_id' => $freshCard->id,
@@ -239,7 +335,7 @@ class VirtualCardService
             ->where('user_id', $userId)
             ->firstOrFail();
 
-        if (!$card->provider_card_id) {
+        if (! $card->provider_card_id) {
             return [
                 'success' => false,
                 'message' => 'This card is missing provider metadata.',
@@ -331,7 +427,7 @@ class VirtualCardService
             ->where('user_id', $userId)
             ->first();
 
-        if (!$card || !$card->provider_card_id) {
+        if (! $card || ! $card->provider_card_id) {
             return $card;
         }
 
@@ -376,7 +472,7 @@ class VirtualCardService
                 $providerTransactions = $providerResponse['data'] ?? [];
                 if (is_array($providerTransactions)) {
                     foreach ($providerTransactions as $providerTransaction) {
-                        if (!is_array($providerTransaction)) {
+                        if (! is_array($providerTransaction)) {
                             continue;
                         }
                         VirtualCardTransaction::updateOrCreate(
@@ -437,7 +533,7 @@ class VirtualCardService
     public function terminateCard(int $userId, int $cardId): array
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
-        if (!$card->provider_card_id) {
+        if (! $card->provider_card_id) {
             return [
                 'success' => false,
                 'message' => 'This card is missing provider metadata.',
@@ -495,7 +591,7 @@ class VirtualCardService
     protected function invokeProviderCardAction(int $userId, int $cardId, callable $apiAction): array
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
-        if (!$card->provider_card_id) {
+        if (! $card->provider_card_id) {
             return ['success' => false, 'message' => 'This card is missing provider metadata.'];
         }
 
@@ -537,11 +633,11 @@ class VirtualCardService
             return null;
         }
 
-        $fullName = trim($firstName . ' ' . $lastName);
+        $fullName = trim($firstName.' '.$lastName);
 
         // Prefer a name match first.
         foreach ($cards as $card) {
-            if (!is_array($card)) {
+            if (! is_array($card)) {
                 continue;
             }
             $nameOnCard = (string) ($card['nameoncard'] ?? $card['name'] ?? '');
@@ -621,6 +717,7 @@ class VirtualCardService
     protected function extractBalance(array $response, ?float $fallback = 0): float
     {
         $value = data_get($response, 'data.balance', data_get($response, 'balance', $fallback));
+
         return (float) $value;
     }
 
@@ -632,7 +729,7 @@ class VirtualCardService
     protected function extractCardsFromListResponse(array $response): array
     {
         $cards = data_get($response, 'data');
-        if (!is_array($cards)) {
+        if (! is_array($cards)) {
             return [];
         }
 

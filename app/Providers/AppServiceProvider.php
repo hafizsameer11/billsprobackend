@@ -2,8 +2,8 @@
 
 namespace App\Providers;
 
-use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -12,7 +12,15 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(\App\Services\Crypto\KeyEncryptionService::class, function () {
+            return \App\Services\Crypto\KeyEncryptionService::fromConfig();
+        });
+
+        $this->app->singleton(\App\Services\Tatum\TatumOutboundTxService::class, function ($app) {
+            return new \App\Services\Tatum\TatumOutboundTxService(
+                $app->make(\App\Services\Crypto\KeyEncryptionService::class)
+            );
+        });
     }
 
     /**
@@ -23,7 +31,7 @@ class AppServiceProvider extends ServiceProvider
         // Force HTTPS URLs in production or when behind proxy
         if (config('app.env') === 'production' || env('FORCE_HTTPS', false)) {
             URL::forceScheme('https');
-        } elseif (request()->header('X-Forwarded-Proto') === 'https' || 
+        } elseif (request()->header('X-Forwarded-Proto') === 'https' ||
                    request()->server('HTTP_X_FORWARDED_PROTO') === 'https') {
             // Auto-detect HTTPS from proxy headers
             URL::forceScheme('https');

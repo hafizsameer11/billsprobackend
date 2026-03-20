@@ -2,33 +2,47 @@
 
 namespace App\Services\Crypto;
 
+use App\Models\FiatWallet;
+use App\Models\MasterWallet;
+use App\Models\MasterWalletTransaction;
 use App\Models\Transaction;
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
-use App\Models\FiatWallet;
+use App\Services\Tatum\DepositAddressService;
+use App\Services\Tatum\TatumOutboundTxService;
 use App\Services\Transaction\TransactionService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class CryptoService
 {
     protected CryptoWalletService $cryptoWalletService;
+
     protected TransactionService $transactionService;
+
     protected WalletService $walletService;
 
     // Transaction fees (in USD)
     const SEND_FEE_USD = 3.0;
+
     const BUY_FEE_PERCENT = 0.01; // 1%
+
     const SELL_FEE_PERCENT = 0.01; // 1%
-    
-    // Exchange rate: $1 = N1,500
+
+    /** @deprecated Use config('crypto.ngn_per_usd') */
     const DEFAULT_EXCHANGE_RATE = 1500.0;
+
+    protected function ngnPerUsd(): float
+    {
+        return (float) config('crypto.ngn_per_usd', self::DEFAULT_EXCHANGE_RATE);
+    }
 
     public function __construct(
         CryptoWalletService $cryptoWalletService,
         TransactionService $transactionService,
-        WalletService $walletService
+        WalletService $walletService,
+        protected DepositAddressService $depositAddressService,
+        protected TatumOutboundTxService $tatumOutbound
     ) {
         $this->cryptoWalletService = $cryptoWalletService;
         $this->transactionService = $transactionService;
@@ -82,7 +96,7 @@ class CryptoService
         }
 
         // Group USDT accounts as one
-        if (!empty($usdtAccounts)) {
+        if (! empty($usdtAccounts)) {
             $totalUsdtBalance = 0;
             $totalUsdtUsdValue = 0;
             $blockchains = [];
@@ -90,11 +104,11 @@ class CryptoService
             foreach ($usdtAccounts as $account) {
                 $balance = (float) $account->available_balance;
                 $totalUsdtBalance += $balance;
-                
+
                 if ($account->walletCurrency) {
                     $rate = (float) ($account->walletCurrency->rate ?? 0);
                     $totalUsdtUsdValue += $balance * $rate;
-                    
+
                     $blockchains[] = [
                         'blockchain' => $account->blockchain,
                         'blockchain_name' => $account->walletCurrency->blockchain_name ?? $account->blockchain,
@@ -126,7 +140,7 @@ class CryptoService
     public function getAccountDetails(int $userId, string $currency, ?string $blockchain = null): ?array
     {
         $account = null;
-        
+
         if ($currency === 'USDT' && $blockchain) {
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', 'USDT')
@@ -143,7 +157,7 @@ class CryptoService
                 ->first();
         }
 
-        if (!$account) {
+        if (! $account) {
             return null;
         }
 
@@ -152,13 +166,13 @@ class CryptoService
         // Get transactions for this currency and blockchain
         $transactionQuery = Transaction::where('user_id', $userId)
             ->where('currency', $currency)
-            ->whereIn('type', ['crypto_buy', 'crypto_sell', 'crypto_withdrawal']);
+            ->whereIn('type', ['crypto_buy', 'crypto_sell', 'crypto_withdrawal', 'crypto_deposit']);
 
         // Filter by blockchain if provided
         if ($blockchain) {
             $transactionQuery->where(function ($q) use ($blockchain) {
                 $q->where('metadata->blockchain', $blockchain)
-                  ->orWhere('metadata->network', $blockchain);
+                    ->orWhere('metadata->network', $blockchain);
             });
         }
 
@@ -167,6 +181,7 @@ class CryptoService
             ->get()
             ->map(function ($transaction) {
                 $metadata = $transaction->metadata ?? [];
+
                 return [
                     'id' => $transaction->id,
                     'transaction_id' => $transaction->transaction_id,
@@ -191,27 +206,37 @@ class CryptoService
     }
 
     /**
-     * Get deposit address for receiving crypto
+     * Get deposit address for receiving crypto.
+     * Uses Tatum (V3 wallet + V4 webhooks) unless config `tatum.use_mock` is true.
      */
     public function getDepositAddress(int $userId, string $currency, string $blockchain): array
     {
-        $account = VirtualAccount::where('user_id', $userId)
-            ->where('currency', $currency)
-            ->where('blockchain', $blockchain)
-            ->where('active', true)
-            ->with('walletCurrency')
-            ->first();
+        $account = $this->findActiveVirtualAccount($userId, $currency, $blockchain);
 
-        if (!$account) {
+        if (! $account) {
+            $this->cryptoWalletService->initializeUserCryptoWallets($userId);
+            $account = $this->findActiveVirtualAccount($userId, $currency, $blockchain);
+        }
+
+        if (! $account) {
             return [
                 'success' => false,
                 'message' => 'Account not found',
             ];
         }
 
-        // Generate deposit address (for now, generate a mock address)
-        // In production, this would integrate with a wallet service
-        $depositAddress = $this->generateDepositAddress($account);
+        if (config('tatum.use_mock')) {
+            $depositAddress = $this->generateDepositAddress($account);
+        } else {
+            try {
+                $depositAddress = $this->depositAddressService->ensureDepositAddressForVirtualAccount($account);
+            } catch (\Throwable $e) {
+                return [
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
 
         return [
             'success' => true,
@@ -227,37 +252,58 @@ class CryptoService
     }
 
     /**
-     * Get exchange rate for buy/sell
+     * Get exchange rate for buy/sell.
+     *
+     * @param  string|null  $blockchain  Required when multiple `wallet_currencies` rows exist for the same `currency` (e.g. USDT on tron vs ethereum).
      */
-    public function getExchangeRate(string $fromCurrency, string $toCurrency, float $amount): array
+    public function getExchangeRate(string $fromCurrency, string $toCurrency, float $amount, ?string $blockchain = null): array
     {
-        // Determine which currency is crypto
-        $cryptoCurrency = $fromCurrency !== 'NGN' ? $fromCurrency : $toCurrency;
-        
-        // Get wallet currency for crypto
-        $walletCurrency = WalletCurrency::where('currency', $cryptoCurrency)
-            ->where('is_active', true)
-            ->first();
+        $fromCurrency = strtoupper(trim($fromCurrency));
+        $toCurrency = strtoupper(trim($toCurrency));
 
-        if (!$walletCurrency) {
+        $cryptoCurrency = $fromCurrency !== 'NGN' ? $fromCurrency : $toCurrency;
+
+        if ($cryptoCurrency === 'NGN') {
             return [
                 'success' => false,
-                'message' => 'Currency not found',
+                'message' => 'Invalid currency pair',
             ];
         }
 
-        $rate = (float) $walletCurrency->rate; // Rate to USD
+        $walletCurrency = WalletCurrency::findActiveForCrypto($cryptoCurrency, $blockchain);
+
+        if (! $walletCurrency) {
+            $msg = WalletCurrency::query()
+                ->where('currency', $cryptoCurrency)
+                ->where('is_active', true)
+                ->count() > 1
+                ? 'blockchain is required for this currency (multiple networks exist).'
+                : 'Currency not found';
+
+            return [
+                'success' => false,
+                'message' => $msg,
+            ];
+        }
+
+        $rate = (float) $walletCurrency->rate; // USD per 1 unit
+        if ($rate <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Exchange rate not configured for this asset',
+            ];
+        }
+
+        $ngnPerUsd = $this->ngnPerUsd();
         $exchangeRate = 1.0;
 
         if ($fromCurrency === 'NGN' && $toCurrency !== 'NGN') {
-            // Buying crypto with NGN
-            $ngnToUsd = 1 / self::DEFAULT_EXCHANGE_RATE;
+            $ngnToUsd = 1 / $ngnPerUsd;
             $exchangeRate = $ngnToUsd / $rate;
             $cryptoAmount = $amount * $exchangeRate;
             $fiatAmount = $amount;
         } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
-            // Selling crypto to NGN
-            $exchangeRate = $rate * self::DEFAULT_EXCHANGE_RATE;
+            $exchangeRate = $rate * $ngnPerUsd;
             $cryptoAmount = $amount;
             $fiatAmount = $amount * $exchangeRate;
         } else {
@@ -270,6 +316,7 @@ class CryptoService
             'data' => [
                 'from_currency' => $fromCurrency,
                 'to_currency' => $toCurrency,
+                'blockchain' => $walletCurrency->blockchain,
                 'amount' => $amount,
                 'exchange_rate' => $exchangeRate,
                 'crypto_amount' => $cryptoAmount,
@@ -287,12 +334,34 @@ class CryptoService
         $currency = $data['currency'];
         $blockchain = $data['blockchain'];
         $amount = (float) $data['amount'];
-        $paymentMethod = $data['payment_method'] ?? 'naira'; // naira, crypto_wallet
+        $paymentMethod = $data['payment_method'] ?? 'naira';
 
-        // Get exchange rate
-        $rateData = $this->getExchangeRate('NGN', $currency, $amount);
-        if (!$rateData['success']) {
+        $rateData = $this->getExchangeRate('NGN', $currency, $amount, $blockchain);
+        if (! $rateData['success']) {
             return $rateData;
+        }
+
+        $existingVa = VirtualAccount::where('user_id', $userId)
+            ->where('currency', $currency)
+            ->where('blockchain', $blockchain)
+            ->where('active', true)
+            ->first();
+        if ($existingVa && $existingVa->frozen) {
+            return [
+                'success' => false,
+                'message' => 'This crypto wallet is frozen.',
+            ];
+        }
+
+        $ngnWallet = FiatWallet::where('user_id', $userId)
+            ->where('currency', 'NGN')
+            ->where('country_code', 'NG')
+            ->first();
+        if ($ngnWallet && ! $ngnWallet->is_active) {
+            return [
+                'success' => false,
+                'message' => 'Your Naira wallet is inactive.',
+            ];
         }
 
         $cryptoAmount = $rateData['data']['crypto_amount'];
@@ -333,7 +402,7 @@ class CryptoService
     public function confirmBuyCrypto(int $userId, array $data): array
     {
         $preview = $this->previewBuyCrypto($userId, $data);
-        if (!$preview['success']) {
+        if (! $preview['success']) {
             return $preview;
         }
 
@@ -349,8 +418,8 @@ class CryptoService
                 ->where('country_code', 'NG')
                 ->lockForUpdate()
                 ->first();
-                
-            if (!$fiatWallet) {
+
+            if (! $fiatWallet) {
                 // Create wallet if doesn't exist
                 $fiatWallet = $this->walletService->createFiatWallet($userId, 'NGN', 'NG');
                 // Reload with lock
@@ -358,15 +427,20 @@ class CryptoService
                     ->lockForUpdate()
                     ->first();
             }
-            
+
+            if (! $fiatWallet->is_active) {
+                return [
+                    'success' => false,
+                    'message' => 'Your Naira wallet is inactive.',
+                ];
+            }
+
             if ($fiatWallet->balance < $previewData['total_amount']) {
                 return [
                     'success' => false,
                     'message' => 'Insufficient balance',
                 ];
             }
-            
-            $fiatWallet->decrement('balance', $previewData['total_amount']);
 
             // Credit crypto wallet (lock for update to prevent race conditions)
             $account = VirtualAccount::where('user_id', $userId)
@@ -376,10 +450,10 @@ class CryptoService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$account) {
+            if (! $account) {
                 // Try to initialize all wallets first
                 $this->cryptoWalletService->initializeUserCryptoWallets($userId);
-                
+
                 // Try to find account again
                 $account = VirtualAccount::where('user_id', $userId)
                     ->where('currency', $currency)
@@ -387,22 +461,19 @@ class CryptoService
                     ->where('active', true)
                     ->lockForUpdate()
                     ->first();
-                
+
                 // If still not found, create it directly
-                if (!$account) {
-                    $walletCurrency = \App\Models\WalletCurrency::where('currency', $currency)
-                        ->where('blockchain', $blockchain)
-                        ->where('is_active', true)
-                        ->first();
-                    
-                    $accountId = strtoupper($blockchain) . '_' . strtoupper($currency) . '_' . $userId . '_' . time() . '_' . \Illuminate\Support\Str::random(8);
-                    
+                if (! $account) {
+                    $walletCurrency = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+
+                    $accountId = strtoupper($blockchain).'_'.strtoupper($currency).'_'.$userId.'_'.time().'_'.\Illuminate\Support\Str::random(8);
+
                     $account = VirtualAccount::create([
                         'user_id' => $userId,
                         'currency_id' => $walletCurrency?->id,
                         'blockchain' => $blockchain,
                         'currency' => $currency,
-                        'customer_id' => 'CUST_' . $userId,
+                        'customer_id' => 'CUST_'.$userId,
                         'account_id' => $accountId,
                         'account_code' => \Illuminate\Support\Str::random(10),
                         'active' => true,
@@ -411,7 +482,7 @@ class CryptoService
                         'available_balance' => '0',
                         'accounting_currency' => $currency,
                     ]);
-                    
+
                     // Reload with lock for update
                     $account = VirtualAccount::where('id', $account->id)
                         ->lockForUpdate()
@@ -419,17 +490,26 @@ class CryptoService
                 }
             }
 
+            if ($account && $account->frozen) {
+                return [
+                    'success' => false,
+                    'message' => 'This crypto wallet is frozen.',
+                ];
+            }
+
+            $fiatWallet->decrement('balance', $previewData['total_amount']);
+
             if ($account) {
                 // Manually update balances since they're stored as strings
                 $currentAvailableBalance = (float) ($account->available_balance ?? '0');
                 $currentAccountBalance = (float) ($account->account_balance ?? '0');
                 $newAvailableBalance = $currentAvailableBalance + $previewData['crypto_amount'];
                 $newAccountBalance = $currentAccountBalance + $previewData['crypto_amount'];
-                
+
                 $account->available_balance = (string) $newAvailableBalance;
                 $account->account_balance = (string) $newAccountBalance;
                 $account->save();
-                
+
                 // Refresh account with relationships
                 $account->refresh();
                 $account->load('walletCurrency');
@@ -446,7 +526,7 @@ class CryptoService
                 'amount' => $previewData['crypto_amount'],
                 'fee' => $previewData['fee_in_crypto'],
                 'total_amount' => $previewData['total_crypto_amount'],
-                'reference' => 'BUY' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
+                'reference' => 'BUY'.strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
                 'description' => "Buy {$previewData['crypto_amount']} {$currency}",
                 'metadata' => [
                     'blockchain' => $blockchain,
@@ -496,10 +576,28 @@ class CryptoService
             ->with('walletCurrency')
             ->first();
 
-        if (!$account) {
+        if (! $account) {
             return [
                 'success' => false,
                 'message' => 'Account not found',
+            ];
+        }
+
+        if ($account->frozen) {
+            return [
+                'success' => false,
+                'message' => 'This crypto wallet is frozen.',
+            ];
+        }
+
+        $ngnWallet = FiatWallet::where('user_id', $userId)
+            ->where('currency', 'NGN')
+            ->where('country_code', 'NG')
+            ->first();
+        if ($ngnWallet && ! $ngnWallet->is_active) {
+            return [
+                'success' => false,
+                'message' => 'Your Naira wallet is inactive.',
             ];
         }
 
@@ -513,9 +611,8 @@ class CryptoService
             ];
         }
 
-        // Get exchange rate
-        $rateData = $this->getExchangeRate($currency, 'NGN', $amount);
-        if (!$rateData['success']) {
+        $rateData = $this->getExchangeRate($currency, 'NGN', $amount, $blockchain);
+        if (! $rateData['success']) {
             return $rateData;
         }
 
@@ -554,7 +651,7 @@ class CryptoService
     public function confirmSellCrypto(int $userId, array $data): array
     {
         $preview = $this->previewSellCrypto($userId, $data);
-        if (!$preview['success']) {
+        if (! $preview['success']) {
             return $preview;
         }
 
@@ -571,10 +668,17 @@ class CryptoService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$account) {
+            if (! $account) {
                 return [
                     'success' => false,
                     'message' => 'Account not found',
+                ];
+            }
+
+            if ($account->frozen) {
+                return [
+                    'success' => false,
+                    'message' => 'This crypto wallet is frozen.',
                 ];
             }
 
@@ -587,30 +691,37 @@ class CryptoService
                 ];
             }
 
-            // Manually update balances since they're stored as strings
-            $currentAccountBalance = (float) ($account->account_balance ?? '0');
-            $newAvailableBalance = $currentAvailableBalance - $previewData['total_crypto_amount'];
-            $newAccountBalance = $currentAccountBalance - $previewData['total_crypto_amount'];
-            
-            $account->available_balance = (string) $newAvailableBalance;
-            $account->account_balance = (string) $newAccountBalance;
-            $account->save();
-            
-            // Refresh account with relationships
-            $account->refresh();
-            $account->load('walletCurrency');
-
-            // Credit Naira wallet with lock
             $fiatWallet = FiatWallet::where('user_id', $userId)
                 ->where('currency', 'NGN')
                 ->where('country_code', 'NG')
                 ->lockForUpdate()
                 ->first();
-                
-            if (!$fiatWallet) {
-                // Create wallet if doesn't exist (outside lock since it's new)
+
+            if (! $fiatWallet) {
                 $fiatWallet = $this->walletService->createFiatWallet($userId, 'NGN', 'NG');
+                $fiatWallet = FiatWallet::where('id', $fiatWallet->id)->lockForUpdate()->first();
             }
+
+            if (! $fiatWallet->is_active) {
+                return [
+                    'success' => false,
+                    'message' => 'Your Naira wallet is inactive.',
+                ];
+            }
+
+            // Manually update balances since they're stored as strings
+            $currentAccountBalance = (float) ($account->account_balance ?? '0');
+            $newAvailableBalance = $currentAvailableBalance - $previewData['total_crypto_amount'];
+            $newAccountBalance = $currentAccountBalance - $previewData['total_crypto_amount'];
+
+            $account->available_balance = (string) $newAvailableBalance;
+            $account->account_balance = (string) $newAccountBalance;
+            $account->save();
+
+            // Refresh account with relationships
+            $account->refresh();
+            $account->load('walletCurrency');
+
             $fiatWallet->increment('balance', $previewData['amount_to_receive']);
 
             // Create transaction
@@ -624,7 +735,7 @@ class CryptoService
                 'amount' => $previewData['crypto_amount'],
                 'fee' => $previewData['fee_in_crypto'],
                 'total_amount' => $previewData['total_crypto_amount'],
-                'reference' => 'SELL' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
+                'reference' => 'SELL'.strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
                 'description' => "Sell {$previewData['crypto_amount']} {$currency}",
                 'metadata' => [
                     'blockchain' => $blockchain,
@@ -649,7 +760,7 @@ class CryptoService
     }
 
     /**
-     * Send crypto (withdrawal)
+     * Send crypto (withdrawal): debit virtual account, broadcast from platform master wallet via Tatum.
      */
     public function sendCrypto(int $userId, array $data): array
     {
@@ -659,7 +770,6 @@ class CryptoService
         $address = $data['address'];
         $network = $data['network'] ?? $blockchain;
 
-        // Validate amount
         if ($amount <= 0) {
             return [
                 'success' => false,
@@ -667,7 +777,6 @@ class CryptoService
             ];
         }
 
-        // Validate address format (basic check)
         if (empty($address) || strlen($address) < 10) {
             return [
                 'success' => false,
@@ -675,18 +784,29 @@ class CryptoService
             ];
         }
 
-        // Calculate fee
-        $feeInUsd = self::SEND_FEE_USD;
-        $walletCurrency = WalletCurrency::where('currency', $currency)
-            ->where('blockchain', $blockchain)
-            ->first();
-        
+        $walletCurrency = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+
         $rate = $walletCurrency ? (float) $walletCurrency->rate : 1.0;
-        $feeInCrypto = $feeInUsd / $rate;
+        $feeInCrypto = self::SEND_FEE_USD / $rate;
         $totalAmount = $amount + $feeInCrypto;
 
-        return DB::transaction(function () use ($userId, $currency, $blockchain, $amount, $feeInCrypto, $totalAmount, $address, $network) {
-            // Lock account for update to prevent race conditions
+        $normalizedChain = DepositAddressService::normalizeBlockchain($blockchain);
+
+        $masterWallet = null;
+        if (! config('tatum.use_mock')) {
+            $masterWallet = MasterWallet::query()
+                ->where('blockchain', $normalizedChain)
+                ->with('secret')
+                ->first();
+            if (! $masterWallet) {
+                return [
+                    'success' => false,
+                    'message' => "No master wallet configured for blockchain \"{$normalizedChain}\". Insert a row in master_wallets with encrypted private key.",
+                ];
+            }
+        }
+
+        $ledger = DB::transaction(function () use ($userId, $currency, $blockchain, $amount, $feeInCrypto, $totalAmount, $address, $network) {
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', $currency)
                 ->where('blockchain', $blockchain)
@@ -694,65 +814,166 @@ class CryptoService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$account) {
-                return [
-                    'success' => false,
-                    'message' => 'Account not found',
-                ];
+            if (! $account) {
+                return ['success' => false, 'message' => 'Account not found'];
             }
 
-            // Check balance inside transaction with lock
+            if ($account->frozen) {
+                return ['success' => false, 'message' => 'This crypto wallet is frozen.'];
+            }
+
             $currentAvailableBalance = (float) ($account->available_balance ?? '0');
             if ($currentAvailableBalance < $totalAmount) {
-                return [
-                    'success' => false,
-                    'message' => 'Insufficient balance',
-                ];
+                return ['success' => false, 'message' => 'Insufficient balance'];
             }
 
-            // Manually update balances since they're stored as strings
             $currentAccountBalance = (float) ($account->account_balance ?? '0');
-            $newAvailableBalance = $currentAvailableBalance - $totalAmount;
-            $newAccountBalance = $currentAccountBalance - $totalAmount;
-            
-            $account->available_balance = (string) $newAvailableBalance;
-            $account->account_balance = (string) $newAccountBalance;
+            $account->available_balance = (string) ($currentAvailableBalance - $totalAmount);
+            $account->account_balance = (string) ($currentAccountBalance - $totalAmount);
             $account->save();
 
-            // Generate transaction hash (mock for now)
-            $txHash = '0x' . bin2hex(random_bytes(32));
-
-            // Create transaction
             $transaction = Transaction::create([
                 'user_id' => $userId,
                 'transaction_id' => Transaction::generateTransactionId(),
                 'type' => 'crypto_withdrawal',
                 'category' => 'crypto_send',
-                'status' => 'completed',
+                'status' => 'pending',
                 'currency' => $currency,
                 'amount' => $amount,
                 'fee' => $feeInCrypto,
                 'total_amount' => $totalAmount,
-                'reference' => 'SEND' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
+                'reference' => 'SEND'.strtoupper(substr(md5(uniqid('send', true)), 0, 12)),
                 'description' => "Send {$amount} {$currency} to {$address}",
                 'metadata' => [
                     'blockchain' => $blockchain,
                     'network' => $network,
-                    'address' => $address,
-                    'tx_hash' => $txHash,
+                    'to_address' => $address,
+                    'settlement' => 'master_wallet',
+                    'master_wallet_send' => true,
+                    'tx_hash' => null,
                 ],
-                'completed_at' => now(),
+                'completed_at' => null,
             ]);
 
             return [
                 'success' => true,
-                'message' => 'Crypto sent successfully',
+                'transaction' => $transaction,
+                'account' => $account->fresh(),
+                'virtual_account_id' => $account->id,
+                'total_amount' => $totalAmount,
+            ];
+        });
+
+        if (! ($ledger['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $ledger['message'] ?? 'Ledger update failed',
+            ];
+        }
+
+        /** @var Transaction $tx */
+        $tx = $ledger['transaction'];
+
+        if (config('tatum.use_mock')) {
+            $mockHash = '0x'.bin2hex(random_bytes(16));
+            $tx->update([
+                'status' => 'completed',
+                'completed_at' => now(),
+                'metadata' => array_merge($tx->metadata ?? [], [
+                    'tx_hash' => $mockHash,
+                    'tatum_mock' => true,
+                ]),
+            ]);
+
+            return [
+                'success' => true,
+                'message' => 'Crypto send completed (TATUM_USE_MOCK — no on-chain broadcast).',
                 'data' => [
-                    'transaction' => $transaction,
-                    'account' => $this->formatAccount($account->fresh()),
-                    'tx_hash' => $txHash,
+                    'transaction' => $tx->fresh(),
+                    'account' => $this->formatAccount($ledger['account']),
+                    'tx_hash' => $mockHash,
+                    'payout_status' => 'completed',
                 ],
             ];
+        }
+
+        try {
+            /** @var MasterWallet $masterWallet */
+            $broadcast = $this->tatumOutbound->sendExternalFromMasterWallet(
+                $masterWallet,
+                $address,
+                (string) $amount,
+                $currency,
+                $normalizedChain
+            );
+        } catch (\Throwable $e) {
+            $this->refundVirtualAccountSend($userId, (int) $ledger['virtual_account_id'], (float) $ledger['total_amount']);
+            $tx->update([
+                'status' => 'failed',
+                'metadata' => array_merge($tx->metadata ?? [], [
+                    'error' => $e->getMessage(),
+                    'broadcast_failed_at' => now()->toIso8601String(),
+                ]),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'On-chain send failed: '.$e->getMessage(),
+            ];
+        }
+
+        $tx->update([
+            'status' => 'completed',
+            'completed_at' => now(),
+            'metadata' => array_merge($tx->metadata ?? [], [
+                'tx_hash' => $broadcast['txId'],
+                'network_fee_actual' => $broadcast['fee'] ?? null,
+                'quoted_platform_fee_crypto' => (float) $tx->fee,
+                'network_fee_policy' => 'User debited amount + platform fee in crypto; Tatum-reported network fee is logged for reconciliation (treasury absorbs on-chain gas variance vs quote).',
+            ]),
+        ]);
+
+        MasterWalletTransaction::create([
+            'master_wallet_id' => $masterWallet->id,
+            'user_id' => $userId,
+            'type' => 'external_send',
+            'blockchain' => $normalizedChain,
+            'currency' => strtoupper($currency),
+            'from_address' => $masterWallet->address,
+            'to_address' => $address,
+            'amount' => (string) $amount,
+            'network_fee' => $broadcast['fee'] ?? null,
+            'tx_hash' => $broadcast['txId'],
+            'internal_transaction_id' => $tx->transaction_id,
+            'metadata' => ['tatum' => $broadcast['raw'] ?? []],
+        ]);
+
+        return [
+            'success' => true,
+            'message' => 'Crypto sent on-chain from master wallet.',
+            'data' => [
+                'transaction' => $tx->fresh(),
+                'account' => $this->formatAccount($ledger['account']),
+                'tx_hash' => $broadcast['txId'],
+                'payout_status' => 'completed',
+            ],
+        ];
+    }
+
+    private function refundVirtualAccountSend(int $userId, int $virtualAccountId, float $totalAmount): void
+    {
+        DB::transaction(function () use ($userId, $virtualAccountId, $totalAmount) {
+            $account = VirtualAccount::where('user_id', $userId)
+                ->where('id', $virtualAccountId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $newAvail = (float) ($account->available_balance ?? '0') + $totalAmount;
+            $newBal = (float) ($account->account_balance ?? '0') + $totalAmount;
+            $account->update([
+                'available_balance' => (string) $newAvail,
+                'account_balance' => (string) $newBal,
+            ]);
         });
     }
 
@@ -782,28 +1003,34 @@ class CryptoService
     }
 
     /**
-     * Generate deposit address (mock for now)
+     * Local-only fake address when `TATUM_USE_MOCK=true` (no Tatum API calls).
      */
     protected function generateDepositAddress(VirtualAccount $account): string
     {
-        // In production, this would integrate with a wallet service
-        // For now, generate a mock address
-        $prefix = match($account->blockchain) {
+        $prefix = match ($account->blockchain) {
             'BTC' => '1',
             'ETH', 'BSC', 'POLYGON' => '0x',
             default => '',
         };
 
-        return $prefix . bin2hex(random_bytes(20));
+        return $prefix.bin2hex(random_bytes(20));
     }
 
     /**
-     * Generate QR code data (mock for now)
+     * Payload for QR encoders: the raw deposit address string (unchanged contract for clients).
      */
     protected function generateQrCode(string $address): string
     {
-        // In production, this would generate an actual QR code
-        // For now, return the address as QR data
         return $address;
+    }
+
+    protected function findActiveVirtualAccount(int $userId, string $currency, string $blockchain): ?VirtualAccount
+    {
+        return VirtualAccount::where('user_id', $userId)
+            ->where('currency', $currency)
+            ->where('blockchain', $blockchain)
+            ->where('active', true)
+            ->with('walletCurrency')
+            ->first();
     }
 }

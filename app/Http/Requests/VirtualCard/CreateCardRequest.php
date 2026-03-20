@@ -28,7 +28,7 @@ class CreateCardRequest extends FormRequest
             'postalcode' => 'required|string|max:20',
             'card_color' => 'nullable|string|in:green,brown,purple',
             'card_type' => 'nullable|string|in:mastercard,visa',
-            'payment_wallet_type' => 'nullable|string|in:naira_wallet,crypto_wallet,provider_balance',
+            'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
             'payment_wallet_currency' => 'nullable|string|max:10',
             'billing_address_street' => 'nullable|string|max:255',
             'billing_address_city' => 'nullable|string|max:100',
@@ -55,6 +55,7 @@ class CreateCardRequest extends FormRequest
             'phone.required' => 'Phone is required.',
             'countrycode.required' => 'Country code is required.',
             'postalcode.required' => 'Postal code is required.',
+            'payment_wallet_type.required' => 'Select whether to pay from Naira or Crypto wallet.',
         ];
     }
 }

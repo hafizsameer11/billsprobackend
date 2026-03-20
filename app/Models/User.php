@@ -11,7 +11,7 @@ use Laravel\Sanctum\HasApiTokens;
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, HasApiTokens;
+    use HasApiTokens, HasFactory, Notifiable;
 
     /**
      * The attributes that are mass assignable.
@@ -30,6 +30,11 @@ class User extends Authenticatable
         'phone_verified',
         'kyc_completed',
         'country_code',
+        'is_admin',
+        'account_status',
+        'suspended_at',
+        'suspension_reason',
+        'internal_notes',
     ];
 
     /**
@@ -41,6 +46,7 @@ class User extends Authenticatable
         'password',
         'pin',
         'remember_token',
+        'internal_notes',
     ];
 
     /**
@@ -57,7 +63,15 @@ class User extends Authenticatable
             'email_verified' => 'boolean',
             'phone_verified' => 'boolean',
             'kyc_completed' => 'boolean',
+            'is_admin' => 'boolean',
+            'account_status' => 'string',
+            'suspended_at' => 'datetime',
         ];
+    }
+
+    public function isAccountActive(): bool
+    {
+        return ($this->account_status ?? 'active') === 'active';
     }
 
     /**

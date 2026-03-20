@@ -1,5 +1,7 @@
 <?php
 
+use App\Jobs\SyncWalletCurrencyRatesFromCoinMarketCapJob;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -14,7 +16,16 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         // Trust all proxies (for load balancers/SSL termination)
         $middleware->trustProxies(at: '*');
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
+            'account.active' => \App\Http\Middleware\EnsureAccountActive::class,
+            'swagger.otp' => \App\Http\Middleware\EnsureSwaggerDocsOtpSession::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
-    })->create();
+    })
+    ->withSchedule(function (Schedule $schedule) {
+        $schedule->job(new SyncWalletCurrencyRatesFromCoinMarketCapJob)->everyFifteenMinutes();
+    })
+    ->create();

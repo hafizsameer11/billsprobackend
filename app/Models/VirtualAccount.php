@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class VirtualAccount extends Model
 {
@@ -45,5 +46,10 @@ class VirtualAccount extends Model
     public function walletCurrency(): BelongsTo
     {
         return $this->belongsTo(WalletCurrency::class, 'currency_id');
+    }
+
+    public function cryptoDepositAddresses(): HasMany
+    {
+        return $this->hasMany(CryptoDepositAddress::class);
     }
 }

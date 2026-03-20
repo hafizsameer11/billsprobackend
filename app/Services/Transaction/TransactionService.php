@@ -4,7 +4,6 @@ namespace App\Services\Transaction;
 
 use App\Models\Transaction;
 use App\Models\VirtualCardTransaction;
-use Illuminate\Support\Facades\DB;
 
 class TransactionService
 {
@@ -76,7 +75,7 @@ class TransactionService
     {
         // Fiat currencies (non-crypto)
         $fiatCurrencies = ['NGN', 'USD', 'EUR', 'GBP', 'KES', 'GHS', 'ZAR', 'EGP'];
-        
+
         $query = Transaction::where('user_id', $userId)
             ->whereIn('currency', $fiatCurrencies);
 
@@ -178,7 +177,7 @@ class TransactionService
         $allTransactions = collect();
 
         // Get regular transactions (Naira, Crypto, Bill Payments, etc.)
-        if (!$walletType || $walletType === 'naira' || $walletType === 'crypto') {
+        if (! $walletType || $walletType === 'naira' || $walletType === 'crypto') {
             $transactionQuery = Transaction::where('user_id', $userId);
 
             // Filter by wallet type
@@ -189,7 +188,7 @@ class TransactionService
             } elseif ($walletType === 'crypto') {
                 // Crypto currencies (exclude fiat or has crypto category or crypto transaction types)
                 $fiatCurrencies = ['NGN', 'USD', 'EUR', 'GBP', 'KES', 'GHS', 'ZAR', 'EGP'];
-                $cryptoTypes = ['crypto_buy', 'crypto_sell', 'crypto_withdrawal'];
+                $cryptoTypes = ['crypto_buy', 'crypto_sell', 'crypto_withdrawal', 'crypto_deposit'];
                 $transactionQuery->where(function ($query) use ($fiatCurrencies, $cryptoTypes) {
                     $query->whereNotIn('currency', $fiatCurrencies)
                         ->orWhere('category', 'like', '%crypto%')
@@ -218,9 +217,9 @@ class TransactionService
                 ->get()
                 ->map(function ($transaction) {
                     $metadata = $transaction->metadata ?? [];
-                    $isPrepaidElectricity = $transaction->type === 'bill_payment' 
-                        && $transaction->category === 'electricity' 
-                        && isset($metadata['accountType']) 
+                    $isPrepaidElectricity = $transaction->type === 'bill_payment'
+                        && $transaction->category === 'electricity'
+                        && isset($metadata['accountType'])
                         && $metadata['accountType'] === 'prepaid'
                         && isset($metadata['rechargeToken']);
 
@@ -254,7 +253,7 @@ class TransactionService
         }
 
         // Get virtual card transactions
-        if (!$walletType || $walletType === 'virtual_card') {
+        if (! $walletType || $walletType === 'virtual_card') {
             $cardTransactionQuery = VirtualCardTransaction::where('user_id', $userId);
 
             if ($type) {
@@ -326,12 +325,12 @@ class TransactionService
     {
         // Check if it's crypto (category contains crypto OR currency is not fiat OR type is crypto)
         $fiatCurrencies = ['NGN', 'USD', 'EUR', 'GBP', 'KES', 'GHS', 'ZAR', 'EGP'];
-        $cryptoTypes = ['crypto_buy', 'crypto_sell', 'crypto_withdrawal'];
+        $cryptoTypes = ['crypto_buy', 'crypto_sell', 'crypto_withdrawal', 'crypto_deposit'];
         $category = strtolower($transaction->category ?? '');
-        
-        if (in_array($transaction->type, $cryptoTypes) 
-            || str_contains($category, 'crypto') 
-            || !in_array($transaction->currency, $fiatCurrencies)) {
+
+        if (in_array($transaction->type, $cryptoTypes)
+            || str_contains($category, 'crypto')
+            || ! in_array($transaction->currency, $fiatCurrencies)) {
             return 'crypto';
         }
 
@@ -343,7 +342,7 @@ class TransactionService
      */
     public function mapCardTransactionType(string $cardType): string
     {
-        return match($cardType) {
+        return match ($cardType) {
             'fund' => 'card_funding',
             'withdraw' => 'card_withdrawal',
             'payment' => 'card_payment',

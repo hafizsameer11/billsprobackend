@@ -26,7 +26,7 @@ class VirtualCardFlowTest extends TestCase
         ]);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['firstname', 'lastname']);
+            ->assertJsonValidationErrors(['firstname', 'lastname', 'payment_wallet_type']);
     }
 
     public function test_fund_card_maps_provider_error_response(): void

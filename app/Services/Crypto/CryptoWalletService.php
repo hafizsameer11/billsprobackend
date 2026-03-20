@@ -4,6 +4,7 @@ namespace App\Services\Crypto;
 
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class CryptoWalletService
@@ -37,7 +38,7 @@ class CryptoWalletService
                 'currency_id' => $currency->id,
                 'blockchain' => $currency->blockchain,
                 'currency' => $currency->currency,
-                'customer_id' => 'CUST_' . $userId,
+                'customer_id' => 'CUST_'.$userId,
                 'account_id' => $accountId,
                 'account_code' => Str::random(10),
                 'active' => true,
@@ -58,7 +59,7 @@ class CryptoWalletService
      */
     protected function generateAccountId(int $userId, string $blockchain, string $currency): string
     {
-        return strtoupper($blockchain) . '_' . strtoupper($currency) . '_' . $userId . '_' . time() . '_' . Str::random(8);
+        return strtoupper($blockchain).'_'.strtoupper($currency).'_'.$userId.'_'.time().'_'.Str::random(8);
     }
 
     /**
@@ -95,10 +96,10 @@ class CryptoWalletService
 
         foreach ($virtualAccounts as $account) {
             $balance = (float) $account->available_balance;
-            
+
             if ($balance > 0 && $account->walletCurrency) {
                 $rate = (float) ($account->walletCurrency->rate ?? 0);
-                
+
                 if ($rate > 0) {
                     // Convert to USD using rate
                     $usdValue = $balance * $rate;
@@ -120,7 +121,7 @@ class CryptoWalletService
 
         foreach ($virtualAccounts as $account) {
             $balance = (float) $account->available_balance;
-            
+
             if ($balance > 0 && $account->walletCurrency) {
                 $rate = (float) ($account->walletCurrency->rate ?? 0);
                 $usdValue = $rate > 0 ? $balance * $rate : 0;
@@ -137,5 +138,75 @@ class CryptoWalletService
         }
 
         return $breakdown;
+    }
+
+    /**
+     * Deduct an amount expressed in USD from user's crypto virtual accounts (proportional by USD value).
+     *
+     * @return array{success: bool, deducted_usd: float, message?: string}
+     */
+    public function deductUsdEquivalent(int $userId, float $amountUsd): array
+    {
+        if ($amountUsd <= 0) {
+            return ['success' => true, 'deducted_usd' => 0.0];
+        }
+
+        return DB::transaction(function () use ($userId, $amountUsd) {
+            $accounts = VirtualAccount::where('user_id', $userId)
+                ->where('active', true)
+                ->with('walletCurrency')
+                ->lockForUpdate()
+                ->get();
+
+            $totalAvailableUsd = 0.0;
+            foreach ($accounts as $account) {
+                $balance = (float) $account->available_balance;
+                $rate = (float) ($account->walletCurrency->rate ?? 0);
+                if ($balance > 0 && $rate > 0) {
+                    $totalAvailableUsd += $balance * $rate;
+                }
+            }
+
+            if ($totalAvailableUsd + 0.0000001 < $amountUsd) {
+                return [
+                    'success' => false,
+                    'deducted_usd' => 0.0,
+                    'message' => 'Insufficient crypto wallet balance for card fee.',
+                ];
+            }
+
+            $remainingUsd = $amountUsd;
+
+            foreach ($accounts as $account) {
+                if ($remainingUsd <= 0) {
+                    break;
+                }
+
+                $balance = (float) $account->available_balance;
+                $rate = (float) ($account->walletCurrency->rate ?? 0);
+                if ($balance <= 0 || $rate <= 0) {
+                    continue;
+                }
+
+                $accountUsd = $balance * $rate;
+                $takeUsd = min($remainingUsd, $accountUsd);
+                $takeCrypto = $takeUsd / $rate;
+
+                $account->decrement('available_balance', $takeCrypto);
+                $account->decrement('account_balance', $takeCrypto);
+
+                $remainingUsd -= $takeUsd;
+            }
+
+            if ($remainingUsd > 0.0001) {
+                return [
+                    'success' => false,
+                    'deducted_usd' => 0.0,
+                    'message' => 'Unable to complete crypto fee deduction.',
+                ];
+            }
+
+            return ['success' => true, 'deducted_usd' => $amountUsd];
+        });
     }
 }
