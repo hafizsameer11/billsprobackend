@@ -42,8 +42,25 @@ class VirtualCardService
             ];
         }
 
-        return DB::transaction(function () use ($userId, $response) {
-            $providerCardId = $this->extractProviderCardId($response) ?? ('prov_' . strtolower(bin2hex(random_bytes(8))));
+        $resolvedProviderCardId = $this->extractProviderCardId($response);
+        if (!$resolvedProviderCardId) {
+            $resolvedProviderCardId = $this->resolveProviderCardIdFromList(
+                (string) $payload['useremail'],
+                (string) $payload['firstname'],
+                (string) $payload['lastname']
+            );
+        }
+
+        if (!$resolvedProviderCardId) {
+            return [
+                'success' => false,
+                'message' => 'Card was issued but provider card ID could not be resolved. Please verify provider get-all endpoint payload and mapping.',
+                'status' => 422,
+            ];
+        }
+
+        return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId) {
+            $providerCardId = $resolvedProviderCardId;
             $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
 
             $card = VirtualCard::updateOrCreate(
@@ -503,6 +520,47 @@ class VirtualCardService
                 'provider_response' => $response,
             ],
         ];
+    }
+
+    protected function resolveProviderCardIdFromList(string $userEmail, string $firstName, string $lastName): ?string
+    {
+        try {
+            $listResponse = $this->bsiCardsClient->getMerchantMasterCards([
+                'useremail' => $userEmail,
+            ]);
+        } catch (BsiCardsApiException) {
+            return null;
+        }
+
+        $cards = $this->extractCardsFromListResponse($listResponse);
+        if ($cards === []) {
+            return null;
+        }
+
+        $fullName = trim($firstName . ' ' . $lastName);
+
+        // Prefer a name match first.
+        foreach ($cards as $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+            $nameOnCard = (string) ($card['nameoncard'] ?? $card['name'] ?? '');
+            $candidateId = (string) ($card['cardid'] ?? $card['card_id'] ?? $card['id'] ?? '');
+            if ($candidateId !== '' && $nameOnCard !== '' && strcasecmp($nameOnCard, $fullName) === 0) {
+                return $candidateId;
+            }
+        }
+
+        // Fallback: last card in list with a valid ID.
+        $cards = array_values(array_filter($cards, static fn ($card) => is_array($card)));
+        for ($i = count($cards) - 1; $i >= 0; $i--) {
+            $candidateId = (string) ($cards[$i]['cardid'] ?? $cards[$i]['card_id'] ?? $cards[$i]['id'] ?? '');
+            if ($candidateId !== '') {
+                return $candidateId;
+            }
+        }
+
+        return null;
     }
 
     protected function extractProviderCardId(array $response): ?string
