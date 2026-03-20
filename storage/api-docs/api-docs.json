@@ -11,7 +11,7 @@
     },
     "servers": [
         {
-            "url": "https://billspro.hmstech.xyz",
+            "url": "https://billspro.hmstech.org",
             "description": "Production server"
         }
     ],
