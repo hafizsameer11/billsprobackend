@@ -58,7 +58,7 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->createCard($request->user()->id, $request->validated());
 
             if (!$result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card creation failed', 400);
+                return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400);
             }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual card created successfully.');
@@ -115,7 +115,7 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->fundCard($request->user()->id, $id, $request->validated());
 
             if (!$result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card funding failed', 400);
+                return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400);
             }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
@@ -365,6 +365,98 @@ class VirtualCardController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
             return ResponseHelper::serverError('An error occurred while unfreezing card. Please try again.');
+        }
+    }
+
+    /**
+     * Terminate card
+     */
+    #[OA\Post(path: "/api/virtual-cards/{id}/terminate", summary: "Terminate virtual card", description: "Terminate a virtual card through provider API.", security: [["sanctum" => []]], tags: ["Virtual Cards"])]
+    #[OA\Parameter(name: "id", in: "path", required: true, description: "Card ID", schema: new OA\Schema(type: "integer", example: 1))]
+    #[OA\Response(response: 200, description: "Card terminated successfully")]
+    #[OA\Response(response: 401, description: "Unauthenticated")]
+    public function terminate(Request $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Card termination failed', 400);
+            }
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Card terminated successfully.');
+        } catch (\Exception $e) {
+            Log::error('Terminate card error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return ResponseHelper::serverError('An error occurred while terminating card. Please try again.');
+        }
+    }
+
+    /**
+     * Check 3DS status
+     */
+    public function check3ds(Request $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->check3ds($request->user()->id, $id);
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to check 3DS status', 400);
+            }
+            return ResponseHelper::success($result['data'], $result['message'] ?? '3DS status fetched successfully.');
+        } catch (\Exception $e) {
+            Log::error('Check 3DS error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return ResponseHelper::serverError('An error occurred while checking 3DS status. Please try again.');
+        }
+    }
+
+    /**
+     * Get wallet OTP
+     */
+    public function checkWallet(Request $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->checkWalletOtp($request->user()->id, $id);
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to fetch wallet OTP', 400);
+            }
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Wallet OTP fetched successfully.');
+        } catch (\Exception $e) {
+            Log::error('Check wallet OTP error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return ResponseHelper::serverError('An error occurred while fetching wallet OTP. Please try again.');
+        }
+    }
+
+    /**
+     * Approve 3DS
+     */
+    public function approve3ds(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'event_id' => 'required|string|max:255',
+        ]);
+
+        try {
+            $result = $this->virtualCardService->approve3ds($request->user()->id, $id, (string) $request->input('event_id'));
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to approve 3DS', 400);
+            }
+            return ResponseHelper::success($result['data'], $result['message'] ?? '3DS approved successfully.');
+        } catch (\Exception $e) {
+            Log::error('Approve 3DS error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return ResponseHelper::serverError('An error occurred while approving 3DS. Please try again.');
         }
     }
 }

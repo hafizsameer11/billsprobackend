@@ -16,6 +16,9 @@ class VirtualCard extends Model
         'expiry_month',
         'expiry_year',
         'card_type',
+        'provider',
+        'provider_card_id',
+        'provider_status',
         'card_color',
         'currency',
         'balance',
@@ -31,6 +34,7 @@ class VirtualCard extends Model
         'billing_address_country',
         'billing_address_postal_code',
         'metadata',
+        'provider_payload',
     ];
 
     protected function casts(): array
@@ -42,6 +46,7 @@ class VirtualCard extends Model
             'is_active' => 'boolean',
             'is_frozen' => 'boolean',
             'metadata' => 'array',
+            'provider_payload' => 'array',
         ];
     }
 

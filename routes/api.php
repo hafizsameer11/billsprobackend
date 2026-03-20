@@ -192,6 +192,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);
         Route::post('/{id}/withdraw', [VirtualCardController::class, 'withdraw']);
         Route::get('/{id}/transactions', [VirtualCardController::class, 'transactions']);
+        Route::post('/{id}/terminate', [VirtualCardController::class, 'terminate']);
+        Route::get('/{id}/check-3ds', [VirtualCardController::class, 'check3ds']);
+        Route::get('/{id}/check-wallet', [VirtualCardController::class, 'checkWallet']);
+        Route::post('/{id}/approve-3ds', [VirtualCardController::class, 'approve3ds']);
         Route::get('/{id}/billing-address', [VirtualCardController::class, 'getBillingAddress']);
         Route::put('/{id}/billing-address', [VirtualCardController::class, 'updateBillingAddress']);
         Route::get('/{id}/limits', [VirtualCardController::class, 'getLimits']);

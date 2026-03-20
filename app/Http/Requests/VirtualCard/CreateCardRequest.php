@@ -14,10 +14,13 @@ class CreateCardRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'card_name' => 'required|string|max:255',
+            'card_name' => 'nullable|string|max:255',
+            'useremail' => 'nullable|email|max:255',
+            'firstname' => 'required|string|max:100',
+            'lastname' => 'required|string|max:100',
             'card_color' => 'nullable|string|in:green,brown,purple',
             'card_type' => 'nullable|string|in:mastercard,visa',
-            'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
+            'payment_wallet_type' => 'nullable|string|in:naira_wallet,crypto_wallet,provider_balance',
             'payment_wallet_currency' => 'nullable|string|max:10',
             'billing_address_street' => 'nullable|string|max:255',
             'billing_address_city' => 'nullable|string|max:100',
@@ -34,8 +37,8 @@ class CreateCardRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'card_name.required' => 'Card name is required.',
-            'payment_wallet_type.required' => 'Payment wallet type is required.',
+            'firstname.required' => 'First name is required.',
+            'lastname.required' => 'Last name is required.',
         ];
     }
 }

@@ -14,8 +14,9 @@ class FundCardRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'amount' => 'required|numeric|min:1',
-            'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
+            'useremail' => 'nullable|email|max:255',
+            'amount' => 'required|numeric|min:0.01',
+            'payment_wallet_type' => 'nullable|string|in:naira_wallet,crypto_wallet,provider_balance',
             'payment_wallet_currency' => 'nullable|string|max:10',
         ];
     }
@@ -24,8 +25,7 @@ class FundCardRequest extends FormRequest
     {
         return [
             'amount.required' => 'Amount is required.',
-            'amount.min' => 'Minimum funding amount is $1.',
-            'payment_wallet_type.required' => 'Payment wallet type is required.',
+            'amount.min' => 'Minimum funding amount is $0.01.',
         ];
     }
 }

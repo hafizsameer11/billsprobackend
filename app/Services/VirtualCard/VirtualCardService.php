@@ -2,124 +2,89 @@
 
 namespace App\Services\VirtualCard;
 
+use App\Models\Transaction;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
-use App\Models\Transaction;
-use App\Models\FiatWallet;
-use App\Services\Auth\AuthService;
-use App\Services\Wallet\WalletService;
-use App\Services\Crypto\CryptoWalletService;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 class VirtualCardService
 {
-    protected AuthService $authService;
-    protected WalletService $walletService;
-    protected CryptoWalletService $cryptoWalletService;
-
-    // Virtual cards always use USD as the primary currency
-    const CARD_CURRENCY = 'USD';
-    
-    // Card creation fee: $3
-    const CARD_CREATION_FEE = 3.0;
-    // Exchange rate: $1 = N1,500 (example)
-    const DEFAULT_EXCHANGE_RATE = 1500.0;
-    // Funding/Withdrawal fee: N500
-    const FUNDING_FEE = 500.0;
-
-    public function __construct(
-        AuthService $authService,
-        WalletService $walletService,
-        CryptoWalletService $cryptoWalletService
-    ) {
-        $this->authService = $authService;
-        $this->walletService = $walletService;
-        $this->cryptoWalletService = $cryptoWalletService;
-    }
+    public function __construct(protected BsiCardsClient $bsiCardsClient) {}
 
     /**
-     * Create virtual card
+     * Create provider-backed merchant digital master card
      */
     public function createCard(int $userId, array $data): array
     {
-        // Check if user has sufficient balance for card creation fee
-        $paymentWallet = $this->getPaymentWallet($userId, $data['payment_wallet_type'] ?? 'naira_wallet', $data['payment_wallet_currency'] ?? 'NGN');
-        
-        if (!$paymentWallet) {
+        $user = User::findOrFail($userId);
+        $payload = [
+            'useremail' => $data['useremail'] ?? $user->email,
+            'firstname' => $data['firstname'] ?? $user->first_name ?? explode(' ', (string) $user->name)[0] ?? 'User',
+            'lastname' => $data['lastname'] ?? $user->last_name ?? trim(str_replace(($user->first_name ?? ''), '', (string) $user->name)) ?: 'Cardholder',
+        ];
+
+        try {
+            $response = $this->bsiCardsClient->createMerchantMasterCard($payload);
+        } catch (BsiCardsApiException $exception) {
             return [
                 'success' => false,
-                'message' => 'Payment wallet not found',
+                'message' => $exception->getMessage(),
+                'status' => $exception->getHttpStatus(),
             ];
         }
 
-        $feeInWalletCurrency = $this->convertToWalletCurrency(self::CARD_CREATION_FEE, 'USD', $data['payment_wallet_currency'] ?? 'NGN');
-        $totalFee = $feeInWalletCurrency + self::FUNDING_FEE; // Card fee + processing fee
+        return DB::transaction(function () use ($userId, $response) {
+            $providerCardId = $this->extractProviderCardId($response) ?? ('prov_' . strtolower(bin2hex(random_bytes(8))));
+            $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
 
-        if ($paymentWallet['balance'] < $totalFee) {
-            return [
-                'success' => false,
-                'message' => 'Insufficient balance for card creation fee',
-            ];
-        }
+            $card = VirtualCard::updateOrCreate(
+                ['provider_card_id' => $providerCardId, 'user_id' => $userId],
+                [
+                    'card_name' => $cardSnapshot['card_name'],
+                    'card_number' => $cardSnapshot['card_number'],
+                    'cvv' => $cardSnapshot['cvv'],
+                    'expiry_month' => $cardSnapshot['expiry_month'],
+                    'expiry_year' => $cardSnapshot['expiry_year'],
+                    'card_type' => 'mastercard',
+                    'provider' => 'bsicards',
+                    'provider_status' => $this->extractStatus($response),
+                    'card_color' => 'green',
+                    'currency' => 'USD',
+                    'balance' => $this->extractBalance($response),
+                    'is_active' => true,
+                    'is_frozen' => false,
+                    'metadata' => [
+                        'source' => 'provider',
+                    ],
+                    'provider_payload' => $response,
+                ]
+            );
 
-        return DB::transaction(function () use ($userId, $data, $paymentWallet, $totalFee) {
-            // Generate card details
-            $cardNumber = VirtualCard::generateCardNumber();
-            $cvv = VirtualCard::generateCvv();
-            $expiry = VirtualCard::generateExpiry();
-
-            // Create virtual card (always in USD)
-            $card = VirtualCard::create([
-                'user_id' => $userId,
-                'card_name' => $data['card_name'],
-                'card_number' => $cardNumber,
-                'cvv' => $cvv,
-                'expiry_month' => $expiry['expiry_month'],
-                'expiry_year' => $expiry['expiry_year'],
-                'card_type' => $data['card_type'] ?? 'mastercard',
-                'card_color' => $data['card_color'] ?? 'green',
-                'currency' => self::CARD_CURRENCY, // Always USD
-                'balance' => 0,
-                'daily_spending_limit' => $data['daily_spending_limit'] ?? 2000,
-                'monthly_spending_limit' => $data['monthly_spending_limit'] ?? 20000,
-                'daily_transaction_limit' => $data['daily_transaction_limit'] ?? 5,
-                'monthly_transaction_limit' => $data['monthly_transaction_limit'] ?? 50,
-                'billing_address_street' => $data['billing_address_street'] ?? null,
-                'billing_address_city' => $data['billing_address_city'] ?? null,
-                'billing_address_state' => $data['billing_address_state'] ?? null,
-                'billing_address_country' => $data['billing_address_country'] ?? null,
-                'billing_address_postal_code' => $data['billing_address_postal_code'] ?? null,
-            ]);
-
-            // Deduct card creation fee
-            $this->deductFromWallet($userId, $paymentWallet['type'], $paymentWallet['currency'], $totalFee);
-
-            // Create transaction record
             $transaction = Transaction::create([
                 'user_id' => $userId,
                 'transaction_id' => Transaction::generateTransactionId(),
                 'type' => 'card_creation',
                 'category' => 'virtual_card',
                 'status' => 'completed',
-                'currency' => $paymentWallet['currency'],
+                'currency' => 'USD',
                 'amount' => 0,
-                'fee' => $totalFee,
-                'total_amount' => $totalFee,
-                'reference' => 'CARD' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
-                'description' => 'Virtual card creation fee',
+                'fee' => 0,
+                'total_amount' => 0,
+                'reference' => 'CARD' . strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                'description' => 'Merchant digital master card created via provider',
                 'metadata' => [
                     'card_id' => $card->id,
-                    'card_name' => $card->card_name,
-                    'card_fee_usd' => self::CARD_CREATION_FEE,
-                    'processing_fee' => self::FUNDING_FEE,
+                    'provider_card_id' => $providerCardId,
                 ],
             ]);
 
             return [
                 'success' => true,
-                'message' => 'Virtual card created successfully',
+                'message' => $response['message'] ?? 'Virtual card created successfully',
                 'data' => [
-                    'card' => $card,
+                    'card' => $card->fresh(),
+                    'provider_response' => $response,
                     'transaction' => $transaction,
                 ],
             ];
@@ -127,222 +92,121 @@ class VirtualCardService
     }
 
     /**
-     * Fund virtual card
+     * Fund provider-backed merchant digital master card.
      */
     public function fundCard(int $userId, int $cardId, array $data): array
     {
         $card = VirtualCard::where('id', $cardId)
             ->where('user_id', $userId)
-            ->where('is_active', true)
             ->firstOrFail();
 
-        $amountUsd = (float) $data['amount'];
-        $paymentWalletType = $data['payment_wallet_type'] ?? 'naira_wallet';
-        $paymentWalletCurrency = $data['payment_wallet_currency'] ?? 'NGN';
-
-        // Get payment wallet
-        $paymentWallet = $this->getPaymentWallet($userId, $paymentWalletType, $paymentWalletCurrency);
-        if (!$paymentWallet) {
+        if (!$card->provider_card_id) {
             return [
                 'success' => false,
-                'message' => 'Payment wallet not found',
+                'message' => 'This card is missing provider metadata and cannot be funded.',
             ];
         }
 
-        // Calculate amounts
-        $exchangeRate = $this->getExchangeRate('USD', $paymentWalletCurrency);
-        $amountInWalletCurrency = $amountUsd * $exchangeRate;
-        $fee = self::FUNDING_FEE;
-        $totalAmount = $amountInWalletCurrency + $fee;
+        $user = User::findOrFail($userId);
+        $payload = [
+            'useremail' => $data['useremail'] ?? $user->email,
+            'cardid' => $card->provider_card_id,
+            'amount' => (float) $data['amount'],
+        ];
 
-        // Check balance
-        if ($paymentWallet['balance'] < $totalAmount) {
+        try {
+            $response = $this->bsiCardsClient->fundMerchantMasterCard($payload);
+        } catch (BsiCardsApiException $exception) {
+            $context = $exception->getContext() ?? [];
+            if (($context['response'] ?? null) === [] || $exception->getHttpStatus() === 404) {
+                $message = 'Provider funding endpoint is not available. Check BSICARDS_MERCHANT_MASTER_FUND_PATH and reseller API contract.';
+            } else {
+                $message = $exception->getMessage();
+            }
             return [
                 'success' => false,
-                'message' => 'Insufficient balance',
+                'message' => $message,
+                'status' => $exception->getHttpStatus(),
             ];
         }
 
-        return DB::transaction(function () use ($userId, $card, $amountUsd, $paymentWalletType, $paymentWalletCurrency, $amountInWalletCurrency, $fee, $totalAmount, $exchangeRate) {
-            // Lock card for update
-            $card = VirtualCard::where('id', $card->id)
+        return DB::transaction(function () use ($userId, $card, $data, $payload, $response) {
+            $freshCard = VirtualCard::where('id', $card->id)
                 ->where('user_id', $userId)
-                ->where('is_active', true)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            // Deduct from wallet (with lock inside deductFromWallet)
-            $this->deductFromWallet($userId, $paymentWalletType, $paymentWalletCurrency, $totalAmount);
+            $freshCard->update([
+                'provider_status' => $this->extractStatus($response, $freshCard->provider_status),
+                'provider_payload' => $response,
+                'balance' => $this->extractBalance($response, (float) $freshCard->balance + (float) $data['amount']),
+            ]);
 
-            // Credit card
-            $card->increment('balance', $amountUsd);
-
-            // Create main transaction
             $transaction = Transaction::create([
                 'user_id' => $userId,
                 'transaction_id' => Transaction::generateTransactionId(),
                 'type' => 'card_funding',
                 'category' => 'virtual_card',
                 'status' => 'completed',
-                'currency' => $paymentWalletCurrency,
-                'amount' => $amountInWalletCurrency,
-                'fee' => $fee,
-                'total_amount' => $totalAmount,
-                'reference' => 'FUND' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
-                'description' => "Fund virtual card with \${$amountUsd}",
+                'currency' => 'USD',
+                'amount' => (float) $data['amount'],
+                'fee' => 0,
+                'total_amount' => (float) $data['amount'],
+                'reference' => 'FUND' . strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                'description' => "Fund merchant digital master card with {$data['amount']} USD",
                 'metadata' => [
-                    'card_id' => $card->id,
-                    'card_name' => $card->card_name,
-                    'amount_usd' => $amountUsd,
-                    'payment_wallet_type' => $paymentWalletType,
-                    'exchange_rate' => $exchangeRate,
+                    'card_id' => $freshCard->id,
+                    'provider_card_id' => $freshCard->provider_card_id,
+                    'provider_payload' => $response,
                 ],
             ]);
 
-            // Create card transaction (always in USD)
             VirtualCardTransaction::create([
-                'virtual_card_id' => $card->id,
+                'virtual_card_id' => $freshCard->id,
                 'user_id' => $userId,
                 'transaction_id' => $transaction->id,
+                'provider_transaction_id' => (string) ($this->extractProviderReference($response) ?? ''),
                 'type' => 'fund',
                 'status' => 'completed',
-                'currency' => self::CARD_CURRENCY, // Always USD
-                'amount' => $amountUsd,
+                'currency' => 'USD',
+                'amount' => (float) $data['amount'],
                 'fee' => 0,
-                'total_amount' => $amountUsd,
-                'payment_wallet_type' => $paymentWalletType,
-                'payment_wallet_currency' => $paymentWalletCurrency,
-                'exchange_rate' => $exchangeRate,
+                'total_amount' => (float) $data['amount'],
+                'payment_wallet_type' => $data['payment_wallet_type'] ?? 'provider_balance',
+                'payment_wallet_currency' => 'USD',
+                'exchange_rate' => 1,
                 'reference' => $transaction->reference,
-                'description' => "Fund card with \${$amountUsd}",
+                'description' => 'Provider funding operation',
+                'provider_payload' => $response,
             ]);
 
             return [
                 'success' => true,
-                'message' => 'Card funded successfully',
+                'message' => $response['message'] ?? 'Card funded successfully',
                 'data' => [
-                    'card' => $card->fresh(),
+                    'card' => $freshCard->fresh(),
                     'transaction' => $transaction,
-                    'amount_funded_usd' => $amountUsd,
-                    'amount_paid' => $totalAmount,
-                    'currency' => $paymentWalletCurrency,
+                    'amount_funded_usd' => (float) $data['amount'],
+                    'provider_response' => $response,
+                    'funding_payload' => $payload,
                 ],
             ];
         });
     }
 
     /**
-     * Withdraw from virtual card
+     * Merchant master withdrawal route currently unsupported by provider docs.
      */
     public function withdrawFromCard(int $userId, int $cardId, array $data): array
     {
-        $card = VirtualCard::where('id', $cardId)
-            ->where('user_id', $userId)
-            ->where('is_active', true)
-            ->where('is_frozen', false)
-            ->firstOrFail();
-
-        $amountUsd = (float) $data['amount'];
-
-        // Check card balance
-        if ($card->balance < $amountUsd) {
-            return [
-                'success' => false,
-                'message' => 'Insufficient card balance',
-            ];
-        }
-
-        // Calculate amounts (withdraw to Naira wallet)
-        $exchangeRate = $this->getExchangeRate('USD', 'NGN');
-        $amountInNgn = $amountUsd * $exchangeRate;
-        $fee = self::FUNDING_FEE;
-        $amountToReceive = $amountInNgn - $fee;
-
-        return DB::transaction(function () use ($userId, $card, $amountUsd, $amountInNgn, $fee, $amountToReceive, $exchangeRate) {
-            // Lock card for update
-            $card = VirtualCard::where('id', $card->id)
-                ->where('user_id', $userId)
-                ->where('is_active', true)
-                ->where('is_frozen', false)
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            // Check balance again inside transaction
-            if ($card->balance < $amountUsd) {
-                return [
-                    'success' => false,
-                    'message' => 'Insufficient card balance',
-                ];
-            }
-
-            // Debit card
-            $card->decrement('balance', $amountUsd);
-
-            // Credit Naira wallet
-            $nairaWallet = $this->walletService->getFiatWallet($userId, 'NGN', 'NG');
-            if ($nairaWallet) {
-                $nairaWallet->increment('balance', $amountToReceive);
-            } else {
-                // Create wallet if doesn't exist
-                $nairaWallet = $this->walletService->createFiatWallet($userId, 'NGN', 'NG');
-                $nairaWallet->increment('balance', $amountToReceive);
-            }
-
-            // Create main transaction
-            $transaction = Transaction::create([
-                'user_id' => $userId,
-                'transaction_id' => Transaction::generateTransactionId(),
-                'type' => 'card_withdrawal',
-                'category' => 'virtual_card',
-                'status' => 'completed',
-                'currency' => 'NGN',
-                'amount' => $amountToReceive,
-                'fee' => $fee,
-                'total_amount' => $amountInNgn,
-                'reference' => 'WDRW' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
-                'description' => "Withdraw \${$amountUsd} from virtual card",
-                'metadata' => [
-                    'card_id' => $card->id,
-                    'card_name' => $card->card_name,
-                    'amount_usd' => $amountUsd,
-                    'exchange_rate' => $exchangeRate,
-                ],
-            ]);
-
-            // Create card transaction (always in USD)
-            VirtualCardTransaction::create([
-                'virtual_card_id' => $card->id,
-                'user_id' => $userId,
-                'transaction_id' => $transaction->id,
-                'type' => 'withdraw',
-                'status' => 'completed',
-                'currency' => self::CARD_CURRENCY, // Always USD
-                'amount' => $amountUsd,
-                'fee' => 0,
-                'total_amount' => $amountUsd,
-                'payment_wallet_type' => 'naira_wallet',
-                'payment_wallet_currency' => 'NGN',
-                'exchange_rate' => $exchangeRate,
-                'reference' => $transaction->reference,
-                'description' => "Withdraw \${$amountUsd} to Naira wallet",
-            ]);
-
-            return [
-                'success' => true,
-                'message' => 'Withdrawal successful',
-                'data' => [
-                    'card' => $card->fresh(),
-                    'transaction' => $transaction,
-                    'amount_withdrawn_usd' => $amountUsd,
-                    'amount_received_ngn' => $amountToReceive,
-                    'fee' => $fee,
-                ],
-            ];
-        });
+        return [
+            'success' => false,
+            'message' => 'Card withdrawal is not supported for merchant digital master flow.',
+        ];
     }
 
     /**
-     * Freeze/Unfreeze card
+     * Freeze/Unfreeze card via provider.
      */
     public function toggleFreeze(int $userId, int $cardId, bool $freeze = true): array
     {
@@ -350,14 +214,43 @@ class VirtualCardService
             ->where('user_id', $userId)
             ->firstOrFail();
 
-        $card->update(['is_frozen' => $freeze]);
+        if (!$card->provider_card_id) {
+            return [
+                'success' => false,
+                'message' => 'This card is missing provider metadata.',
+            ];
+        }
+
+        $user = User::findOrFail($userId);
+        $payload = [
+            'useremail' => $user->email,
+            'cardid' => $card->provider_card_id,
+        ];
+
+        try {
+            $response = $freeze
+                ? $this->bsiCardsClient->blockMerchantMasterCard($payload)
+                : $this->bsiCardsClient->unblockMerchantMasterCard($payload);
+        } catch (BsiCardsApiException $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ];
+        }
+
+        $card->update([
+            'is_frozen' => $freeze,
+            'provider_status' => $this->extractStatus($response, $card->provider_status),
+            'provider_payload' => $response,
+        ]);
 
         return [
             'success' => true,
-            'message' => $freeze ? 'Card frozen successfully' : 'Card unfrozen successfully',
+            'message' => $response['message'] ?? ($freeze ? 'Card frozen successfully' : 'Card unfrozen successfully'),
             'data' => [
                 'card' => $card->fresh(),
                 'is_frozen' => $freeze,
+                'provider_response' => $response,
             ],
         ];
     }
@@ -367,6 +260,37 @@ class VirtualCardService
      */
     public function getUserCards(int $userId): \Illuminate\Database\Eloquent\Collection
     {
+        $user = User::findOrFail($userId);
+
+        try {
+            $response = $this->bsiCardsClient->getMerchantMasterCards(['useremail' => $user->email]);
+            $cards = $this->extractCardsFromListResponse($response);
+
+            foreach ($cards as $providerCard) {
+                $providerCardId = (string) ($providerCard['cardid'] ?? $providerCard['id'] ?? '');
+                if ($providerCardId !== '') {
+                    $snapshot = $this->extractCardSnapshot(['data' => $providerCard], $providerCardId);
+                    VirtualCard::updateOrCreate(
+                        ['provider_card_id' => $providerCardId, 'user_id' => $userId],
+                        [
+                            'card_name' => $snapshot['card_name'],
+                            'card_number' => $snapshot['card_number'],
+                            'cvv' => $snapshot['cvv'],
+                            'expiry_month' => $snapshot['expiry_month'],
+                            'expiry_year' => $snapshot['expiry_year'],
+                            'provider' => 'bsicards',
+                            'provider_status' => (string) ($providerCard['status'] ?? 'active'),
+                            'currency' => 'USD',
+                            'balance' => (float) ($providerCard['balance'] ?? 0),
+                            'provider_payload' => $providerCard,
+                        ]
+                    );
+                }
+            }
+        } catch (BsiCardsApiException) {
+            // Fall back to cached cards if provider fails.
+        }
+
         return VirtualCard::where('user_id', $userId)
             ->where('is_active', true)
             ->orderBy('created_at', 'desc')
@@ -378,9 +302,37 @@ class VirtualCardService
      */
     public function getCard(int $userId, int $cardId): ?VirtualCard
     {
-        return VirtualCard::where('id', $cardId)
+        $card = VirtualCard::where('id', $cardId)
             ->where('user_id', $userId)
             ->first();
+
+        if (!$card || !$card->provider_card_id) {
+            return $card;
+        }
+
+        $user = User::findOrFail($userId);
+        try {
+            $response = $this->bsiCardsClient->getMerchantMasterCard([
+                'useremail' => $user->email,
+                'cardid' => $card->provider_card_id,
+            ]);
+
+            $snapshot = $this->extractCardSnapshot($response, $card->provider_card_id);
+            $card->update([
+                'card_name' => $snapshot['card_name'],
+                'card_number' => $snapshot['card_number'],
+                'cvv' => $snapshot['cvv'],
+                'expiry_month' => $snapshot['expiry_month'],
+                'expiry_year' => $snapshot['expiry_year'],
+                'balance' => $this->extractBalance($response, (float) $card->balance),
+                'provider_status' => $this->extractStatus($response, $card->provider_status),
+                'provider_payload' => $response,
+            ]);
+        } catch (BsiCardsApiException) {
+            // return cached card
+        }
+
+        return $card->fresh();
     }
 
     /**
@@ -388,6 +340,45 @@ class VirtualCardService
      */
     public function getCardTransactions(int $userId, int $cardId, int $limit = 50): \Illuminate\Database\Eloquent\Collection
     {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
+        if ($card && $card->provider_card_id) {
+            $user = User::findOrFail($userId);
+            try {
+                $providerResponse = $this->bsiCardsClient->merchantMasterTransactions([
+                    'useremail' => $user->email,
+                    'cardid' => $card->provider_card_id,
+                ]);
+                $providerTransactions = $providerResponse['data'] ?? [];
+                if (is_array($providerTransactions)) {
+                    foreach ($providerTransactions as $providerTransaction) {
+                        if (!is_array($providerTransaction)) {
+                            continue;
+                        }
+                        VirtualCardTransaction::updateOrCreate(
+                            [
+                                'virtual_card_id' => $cardId,
+                                'provider_transaction_id' => (string) ($providerTransaction['id'] ?? $providerTransaction['reference'] ?? ''),
+                            ],
+                            [
+                                'user_id' => $userId,
+                                'type' => (string) ($providerTransaction['type'] ?? 'provider'),
+                                'status' => (string) ($providerTransaction['status'] ?? 'completed'),
+                                'currency' => (string) ($providerTransaction['currency'] ?? 'USD'),
+                                'amount' => (float) ($providerTransaction['amount'] ?? 0),
+                                'fee' => (float) ($providerTransaction['fee'] ?? 0),
+                                'total_amount' => (float) ($providerTransaction['total_amount'] ?? $providerTransaction['amount'] ?? 0),
+                                'reference' => (string) ($providerTransaction['reference'] ?? null),
+                                'description' => (string) ($providerTransaction['description'] ?? 'Provider card transaction'),
+                                'provider_payload' => $providerTransaction,
+                            ]
+                        );
+                    }
+                }
+            } catch (BsiCardsApiException) {
+                // return local cache
+            }
+        }
+
         return VirtualCardTransaction::where('virtual_card_id', $cardId)
             ->where('user_id', $userId)
             ->with(['transaction'])
@@ -416,95 +407,174 @@ class VirtualCardService
     }
 
     /**
-     * Get payment wallet (Naira or Crypto)
+     * Terminate card via provider.
      */
-    protected function getPaymentWallet(int $userId, string $type, string $currency): ?array
+    public function terminateCard(int $userId, int $cardId): array
     {
-        if ($type === 'naira_wallet') {
-            $wallet = $this->walletService->getFiatWallet($userId, $currency, 'NG');
-            if ($wallet) {
-                return [
-                    'type' => 'naira_wallet',
-                    'currency' => $currency,
-                    'balance' => (float) $wallet->balance,
-                ];
-            }
-        } elseif ($type === 'crypto_wallet') {
-            // Get crypto balance in USD
-            $balanceUsd = $this->cryptoWalletService->getTotalCryptoBalanceInUsd($userId);
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
+        if (!$card->provider_card_id) {
             return [
-                'type' => 'crypto_wallet',
-                'currency' => self::CARD_CURRENCY, // Always USD
-                'balance' => $balanceUsd,
+                'success' => false,
+                'message' => 'This card is missing provider metadata.',
             ];
+        }
+
+        $user = User::findOrFail($userId);
+        try {
+            $response = $this->bsiCardsClient->terminateMerchantMasterCard([
+                'useremail' => $user->email,
+                'cardid' => $card->provider_card_id,
+            ]);
+        } catch (BsiCardsApiException $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ];
+        }
+
+        $card->update([
+            'is_active' => false,
+            'provider_status' => $this->extractStatus($response, 'terminated'),
+            'provider_payload' => $response,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => $response['message'] ?? 'Card terminated successfully',
+            'data' => [
+                'card' => $card->fresh(),
+                'provider_response' => $response,
+            ],
+        ];
+    }
+
+    public function check3ds(int $userId, int $cardId): array
+    {
+        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->bsiCardsClient->check3ds($payload));
+    }
+
+    public function checkWalletOtp(int $userId, int $cardId): array
+    {
+        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->bsiCardsClient->checkWallet($payload));
+    }
+
+    public function approve3ds(int $userId, int $cardId, string $eventId): array
+    {
+        return $this->invokeProviderCardAction(
+            $userId,
+            $cardId,
+            fn (array $payload) => $this->bsiCardsClient->approve3ds(array_merge($payload, ['eventId' => $eventId]))
+        );
+    }
+
+    protected function invokeProviderCardAction(int $userId, int $cardId, callable $apiAction): array
+    {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
+        if (!$card->provider_card_id) {
+            return ['success' => false, 'message' => 'This card is missing provider metadata.'];
+        }
+
+        $user = User::findOrFail($userId);
+        $payload = ['useremail' => $user->email, 'cardid' => $card->provider_card_id];
+        try {
+            $response = $apiAction($payload);
+        } catch (BsiCardsApiException $exception) {
+            return ['success' => false, 'message' => $exception->getMessage()];
+        }
+
+        $card->update([
+            'provider_status' => $this->extractStatus($response, $card->provider_status),
+            'provider_payload' => $response,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => $response['message'] ?? 'Provider action completed successfully',
+            'data' => [
+                'card' => $card->fresh(),
+                'provider_response' => $response,
+            ],
+        ];
+    }
+
+    protected function extractProviderCardId(array $response): ?string
+    {
+        $candidates = [
+            data_get($response, 'data.cardid'),
+            data_get($response, 'data.card_id'),
+            data_get($response, 'data.id'),
+            data_get($response, 'cardid'),
+            data_get($response, 'card_id'),
+            data_get($response, 'id'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
         }
 
         return null;
     }
 
-    /**
-     * Deduct from wallet
-     */
-    protected function deductFromWallet(int $userId, string $type, string $currency, float $amount): void
+    protected function extractProviderReference(array $response): ?string
     {
-        if ($type === 'naira_wallet') {
-            // Lock wallet for update (should already be in transaction)
-            $wallet = FiatWallet::where('user_id', $userId)
-                ->where('currency', $currency)
-                ->where('country_code', 'NG')
-                ->lockForUpdate()
-                ->first();
-            if ($wallet) {
-                // Check balance before deducting
-                if ($wallet->balance < $amount) {
-                    throw new \Exception('Insufficient balance');
-                }
-                $wallet->decrement('balance', $amount);
-            }
-        } elseif ($type === 'crypto_wallet') {
-            // For crypto wallet, convert USD amount to crypto and deduct proportionally
-            // For now, we'll deduct from fiat wallet if crypto balance is insufficient
-            // In production, this should properly handle crypto wallet deduction
-            $cryptoBalanceUsd = $this->cryptoWalletService->getTotalCryptoBalanceInUsd($userId);
-            if ($cryptoBalanceUsd >= $amount) {
-                // TODO: Implement proper crypto wallet deduction
-                // For now, we'll use a simplified approach
-            } else {
-                // Fallback to Naira wallet if crypto insufficient
-                $nairaWallet = $this->walletService->getFiatWallet($userId, 'NGN', 'NG');
-                if ($nairaWallet) {
-                    $amountInNgn = $this->convertToWalletCurrency($amount, 'USD', 'NGN');
-                    $nairaWallet->decrement('balance', $amountInNgn);
-                }
+        $candidates = [
+            data_get($response, 'data.reference'),
+            data_get($response, 'reference'),
+            data_get($response, 'data.transaction_id'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
             }
         }
+
+        return null;
     }
 
-    /**
-     * Get exchange rate
-     */
-    protected function getExchangeRate(string $from, string $to): float
+    protected function extractCardSnapshot(array $response, string $providerCardId): array
     {
-        // Default exchange rate: $1 = N1,500
-        if ($from === 'USD' && $to === 'NGN') {
-            return self::DEFAULT_EXCHANGE_RATE;
-        } elseif ($from === 'NGN' && $to === 'USD') {
-            return 1 / self::DEFAULT_EXCHANGE_RATE;
+        $rawNumber = (string) (data_get($response, 'data.pan') ?? data_get($response, 'data.card_number') ?? '');
+        $digits = preg_replace('/\D+/', '', $rawNumber ?? '') ?? '';
+        if ($digits === '') {
+            $digits = substr(preg_replace('/\D+/', '', str_pad((string) crc32($providerCardId), 16, '0', STR_PAD_LEFT)) ?? '', 0, 16);
         }
+        $digits = str_pad(substr($digits, 0, 16), 16, '0', STR_PAD_RIGHT);
 
-        return 1.0; // Same currency
+        return [
+            'card_name' => (string) (data_get($response, 'data.nameoncard') ?? data_get($response, 'data.name') ?? 'Merchant Card'),
+            'card_number' => $digits,
+            'cvv' => str_pad((string) (data_get($response, 'data.cvv') ?? '000'), 3, '0', STR_PAD_LEFT),
+            'expiry_month' => str_pad((string) (data_get($response, 'data.expiry_month') ?? date('m')), 2, '0', STR_PAD_LEFT),
+            'expiry_year' => (string) (data_get($response, 'data.expiry_year') ?? date('Y', strtotime('+2 years'))),
+        ];
     }
 
-    /**
-     * Convert amount to wallet currency
-     */
-    protected function convertToWalletCurrency(float $amount, string $fromCurrency, string $toCurrency): float
+    protected function extractBalance(array $response, ?float $fallback = 0): float
     {
-        if ($fromCurrency === $toCurrency) {
-            return $amount;
+        $value = data_get($response, 'data.balance', data_get($response, 'balance', $fallback));
+        return (float) $value;
+    }
+
+    protected function extractStatus(array $response, ?string $fallback = 'active'): string
+    {
+        return (string) (data_get($response, 'data.status') ?? data_get($response, 'status') ?? $fallback ?? 'active');
+    }
+
+    protected function extractCardsFromListResponse(array $response): array
+    {
+        $cards = data_get($response, 'data');
+        if (!is_array($cards)) {
+            return [];
         }
 
-        $rate = $this->getExchangeRate($fromCurrency, $toCurrency);
-        return $amount * $rate;
+        $isAssoc = array_keys($cards) !== range(0, count($cards) - 1);
+        if ($isAssoc) {
+            return [$cards];
+        }
+
+        return array_values(array_filter($cards, 'is_array'));
     }
 }

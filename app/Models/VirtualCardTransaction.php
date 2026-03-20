@@ -11,6 +11,7 @@ class VirtualCardTransaction extends Model
         'virtual_card_id',
         'user_id',
         'transaction_id',
+        'provider_transaction_id',
         'type',
         'status',
         'currency',
@@ -23,6 +24,7 @@ class VirtualCardTransaction extends Model
         'reference',
         'description',
         'metadata',
+        'provider_payload',
     ];
 
     protected function casts(): array
@@ -33,6 +35,7 @@ class VirtualCardTransaction extends Model
             'total_amount' => 'decimal:8',
             'exchange_rate' => 'decimal:8',
             'metadata' => 'array',
+            'provider_payload' => 'array',
         ];
     }
 
