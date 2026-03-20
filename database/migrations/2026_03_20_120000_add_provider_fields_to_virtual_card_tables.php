@@ -16,6 +16,7 @@ return new class extends Migration
 
             $table->index('provider_card_id');
             $table->index('provider_status');
+            //
         });
 
         Schema::table('virtual_card_transactions', function (Blueprint $table) {
