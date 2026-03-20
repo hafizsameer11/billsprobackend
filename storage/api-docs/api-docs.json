@@ -4622,7 +4622,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Create virtual card",
-                "description": "Create a new virtual card. Requires card creation fee of $3.",
+                "description": "Create a merchant digital master virtual card via provider.",
                 "operationId": "3c5278ce0513afc80c49f302df082d37",
                 "requestBody": {
                     "required": true,
@@ -4630,13 +4630,28 @@
                         "application/json": {
                             "schema": {
                                 "required": [
-                                    "card_name",
-                                    "payment_wallet_type"
+                                    "firstname",
+                                    "lastname"
                                 ],
                                 "properties": {
+                                    "firstname": {
+                                        "type": "string",
+                                        "example": "John"
+                                    },
+                                    "lastname": {
+                                        "type": "string",
+                                        "example": "Doe"
+                                    },
+                                    "useremail": {
+                                        "type": "string",
+                                        "format": "email",
+                                        "example": "merchantuser@billspro.hmstech.org",
+                                        "nullable": true
+                                    },
                                     "card_name": {
                                         "type": "string",
-                                        "example": "Qamardeen Abdulmalik"
+                                        "example": "John Doe Merchant Card",
+                                        "nullable": true
                                     },
                                     "card_color": {
                                         "type": "string",
@@ -4652,13 +4667,15 @@
                                         "type": "string",
                                         "enum": [
                                             "naira_wallet",
-                                            "crypto_wallet"
+                                            "crypto_wallet",
+                                            "provider_balance"
                                         ],
-                                        "example": "naira_wallet"
+                                        "example": "provider_balance",
+                                        "nullable": true
                                     },
                                     "payment_wallet_currency": {
                                         "type": "string",
-                                        "example": "NGN",
+                                        "example": "USD",
                                         "nullable": true
                                     },
                                     "billing_address_street": {
@@ -4784,7 +4801,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Fund virtual card",
-                "description": "Add funds to virtual card from Naira or Crypto wallet.",
+                "description": "Fund merchant digital master virtual card via provider endpoint.",
                 "operationId": "6cd62438a0ea7afa8785acc314a77333",
                 "parameters": [
                     {
@@ -4804,27 +4821,34 @@
                         "application/json": {
                             "schema": {
                                 "required": [
-                                    "amount",
-                                    "payment_wallet_type"
+                                    "amount"
                                 ],
                                 "properties": {
                                     "amount": {
-                                        "description": "Amount in USD",
+                                        "description": "Amount to fund",
                                         "type": "number",
                                         "format": "float",
-                                        "example": 10
+                                        "example": 50
+                                    },
+                                    "useremail": {
+                                        "type": "string",
+                                        "format": "email",
+                                        "example": "merchantuser@billspro.hmstech.org",
+                                        "nullable": true
                                     },
                                     "payment_wallet_type": {
                                         "type": "string",
                                         "enum": [
                                             "naira_wallet",
-                                            "crypto_wallet"
+                                            "crypto_wallet",
+                                            "provider_balance"
                                         ],
-                                        "example": "naira_wallet"
+                                        "example": "provider_balance",
+                                        "nullable": true
                                     },
                                     "payment_wallet_currency": {
                                         "type": "string",
-                                        "example": "NGN",
+                                        "example": "USD",
                                         "nullable": true
                                     }
                                 },
@@ -4876,7 +4900,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Withdraw from virtual card",
-                "description": "Withdraw funds from virtual card to Naira wallet.",
+                "description": "Legacy endpoint. Merchant Digital Master provider flow currently does not support direct withdraw through this API.",
                 "operationId": "55612a1e27ab9eec08d31a261aadd73d",
                 "parameters": [
                     {
@@ -4913,7 +4937,7 @@
                 },
                 "responses": {
                     "200": {
-                        "description": "Withdrawal successful",
+                        "description": "Backward-compatibility response shape",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -4932,7 +4956,7 @@
                         }
                     },
                     "400": {
-                        "description": "Insufficient card balance"
+                        "description": "Operation not supported or invalid request"
                     },
                     "401": {
                         "description": "Unauthenticated"
@@ -5429,6 +5453,202 @@
                     },
                     "401": {
                         "description": "Unauthenticated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/virtual-cards/{id}/check-3ds": {
+            "get": {
+                "tags": [
+                    "Virtual Cards"
+                ],
+                "summary": "Check card 3DS status",
+                "description": "Check 3DS status for merchant digital master card.",
+                "operationId": "bccd34939cfffff58821fd140475d2de",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Card ID",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "3DS status fetched successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "3DS status fetched successfully"
+                                        },
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Provider rejected request"
+                    },
+                    "401": {
+                        "description": "Unauthenticated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/virtual-cards/{id}/check-wallet": {
+            "get": {
+                "tags": [
+                    "Virtual Cards"
+                ],
+                "summary": "Get wallet OTP",
+                "description": "Fetch latest wallet OTP for merchant digital master card.",
+                "operationId": "f69133f933115b13db0cf353e86c1889",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Card ID",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Wallet OTP fetched successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Wallet OTP fetched successfully"
+                                        },
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Provider rejected request"
+                    },
+                    "401": {
+                        "description": "Unauthenticated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/virtual-cards/{id}/approve-3ds": {
+            "post": {
+                "tags": [
+                    "Virtual Cards"
+                ],
+                "summary": "Approve 3DS challenge",
+                "description": "Approve a pending 3DS challenge for merchant digital master card.",
+                "operationId": "7d4523efd359ee5c00732338cacafb14",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Card ID",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "event_id"
+                                ],
+                                "properties": {
+                                    "event_id": {
+                                        "type": "string",
+                                        "example": "3ds-3f41728f-cfd1-4cca-8404-bc8f5e9d71d6"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "3DS approved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "3DS approved successfully"
+                                        },
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Provider rejected request or validation error"
+                    },
+                    "401": {
+                        "description": "Unauthenticated"
+                    },
+                    "422": {
+                        "description": "Validation error"
                     }
                 },
                 "security": [
