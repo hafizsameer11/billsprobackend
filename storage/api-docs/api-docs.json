@@ -2,7 +2,7 @@
     "openapi": "3.0.0",
     "info": {
         "title": "Bill's Pro API",
-        "description": "Bill's Pro API: fiat/crypto wallets, bill payments, KYC, and **Virtual Cards (Merchant Digital Master / BSICards)**. See tag **Virtual Cards** for creation fees (`VIRTUAL_CARD_*` env) and provider-linked routes.",
+        "description": "Bill's Pro API: fiat/crypto wallets, bill payments, KYC, and **virtual Mastercard** (reseller API). See tag **Virtual Cards** for creation fees (`VIRTUAL_CARD_*` env) and `MASTERCARD_API_*` provider settings.",
         "contact": {
             "name": "API Support",
             "email": "support@billspro.com"
@@ -4621,7 +4621,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "List virtual cards",
-                "description": "Returns cached merchant digital master cards for the user and syncs with the provider when possible.",
+                "description": "Returns cached virtual Mastercards for the user and syncs with the provider when possible.",
                 "operationId": "99ca84c76187e54ba3224e8add2f49e0",
                 "responses": {
                     "200": {
@@ -4660,8 +4660,8 @@
                 "tags": [
                     "Virtual Cards"
                 ],
-                "summary": "Create merchant digital master card",
-                "description": "Issues a BSICards Digital Master card. **Wallet fee (required):** send `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. Naira fee (NGN) = `VIRTUAL_CARD_CREATION_FEE_USD` × `VIRTUAL_CARD_USD_TO_NGN_RATE` + `VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN`. Crypto fee (USD equivalent) matches the same total. Balance is checked **before** calling the provider; fee is debited **after** successful issue. **Provider KYC/identity fields** (required): `dob`, `address1`, `postalcode`, `city`, `state`, `country` (ISO-3166 alpha-2), `countrycode`, `phone`.",
+                "summary": "Create virtual Mastercard",
+                "description": "Issues a virtual Mastercard. **Wallet fee (required):** `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. Naira fee (NGN) = `VIRTUAL_CARD_CREATION_FEE_USD` × `VIRTUAL_CARD_USD_TO_NGN_RATE` + `VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN`. Crypto fee (USD equivalent) matches the same total. Balance is checked **before** calling the provider; fee is debited **after** successful issue. **Provider body:** `firstname`, `lastname`, `email` (defaults from the authenticated user; optional `email` / `useremail` override). KYC fields are optional for local/billing only.",
                 "operationId": "3c5278ce0513afc80c49f302df082d37",
                 "requestBody": {
                     "required": true,
@@ -4669,63 +4669,62 @@
                         "application/json": {
                             "schema": {
                                 "required": [
-                                    "firstname",
-                                    "lastname",
-                                    "dob",
-                                    "address1",
-                                    "city",
-                                    "state",
-                                    "country",
-                                    "phone",
-                                    "countrycode",
-                                    "postalcode",
                                     "payment_wallet_type"
                                 ],
                                 "properties": {
                                     "firstname": {
                                         "type": "string",
-                                        "example": "John"
+                                        "example": "John",
+                                        "nullable": true
                                     },
                                     "lastname": {
                                         "type": "string",
-                                        "example": "Doe"
+                                        "example": "Doe",
+                                        "nullable": true
                                     },
                                     "dob": {
                                         "description": "YYYY-MM-DD",
                                         "type": "string",
                                         "format": "date",
-                                        "example": "1979-12-17"
+                                        "example": "1979-12-17",
+                                        "nullable": true
                                     },
                                     "address1": {
                                         "type": "string",
-                                        "example": "128 city road"
+                                        "example": "128 city road",
+                                        "nullable": true
                                     },
                                     "postalcode": {
                                         "type": "string",
-                                        "example": "ec1v2nx"
+                                        "example": "ec1v2nx",
+                                        "nullable": true
                                     },
                                     "city": {
                                         "type": "string",
-                                        "example": "london"
+                                        "example": "london",
+                                        "nullable": true
                                     },
                                     "country": {
                                         "description": "ISO-3166 alpha-2",
                                         "type": "string",
-                                        "example": "GB"
+                                        "example": "GB",
+                                        "nullable": true
                                     },
                                     "state": {
                                         "type": "string",
-                                        "example": "london"
+                                        "example": "london",
+                                        "nullable": true
                                     },
                                     "countrycode": {
                                         "description": "Phone country code without +",
                                         "type": "string",
-                                        "example": "44"
+                                        "example": "44",
+                                        "nullable": true
                                     },
                                     "phone": {
-                                        "description": "Digits (per provider sample)",
                                         "type": "string",
-                                        "example": "911266016115"
+                                        "example": "911266016115",
+                                        "nullable": true
                                     },
                                     "payment_wallet_type": {
                                         "description": "Where to debit the card creation fee",
@@ -4742,8 +4741,14 @@
                                         "example": "NGN",
                                         "nullable": true
                                     },
+                                    "email": {
+                                        "description": "Overrides email sent to provider",
+                                        "type": "string",
+                                        "format": "email",
+                                        "nullable": true
+                                    },
                                     "useremail": {
-                                        "description": "Overrides user email sent to provider",
+                                        "description": "Alias of email for provider",
                                         "type": "string",
                                         "format": "email",
                                         "example": "merchantuser@billspro.hmstech.org",
@@ -4852,7 +4857,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get card details",
-                "description": "Fetches merchant digital master card details; refreshes from provider when possible. May include masked PAN/CVV in local cache.",
+                "description": "Fetches virtual Mastercard details; refreshes from provider when possible. May include masked PAN/CVV in local cache.",
                 "operationId": "62b7a35f3044a434e872c5281c9abe72",
                 "parameters": [
                     {
@@ -4906,7 +4911,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Fund virtual card",
-                "description": "Calls BSICards merchant fund endpoint (`BSICARDS_MERCHANT_MASTER_FUND_PATH`). `amount` is sent to the provider; optional `useremail` overrides the authenticated user email. `payment_wallet_type` is optional metadata (fund is charged by provider / merchant balance, not debited from app naira/crypto in this flow).",
+                "description": "Calls provider `fundcard` with `cardid`, `email`, `amount` (funding wallet / fees per provider). Optional `email` or `useremail` overrides the authenticated user email.",
                 "operationId": "6cd62438a0ea7afa8785acc314a77333",
                 "parameters": [
                     {
@@ -4935,8 +4940,14 @@
                                         "format": "float",
                                         "example": 50
                                     },
+                                    "email": {
+                                        "description": "Email sent to provider",
+                                        "type": "string",
+                                        "format": "email",
+                                        "nullable": true
+                                    },
                                     "useremail": {
-                                        "description": "Email sent as useremail to provider",
+                                        "description": "Alias of email for provider",
                                         "type": "string",
                                         "format": "email",
                                         "nullable": true
@@ -5009,7 +5020,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Withdraw from virtual card",
-                "description": "Legacy endpoint. Merchant Digital Master provider flow currently does not support direct withdraw through this API.",
+                "description": "Legacy endpoint. The current provider flow does not support direct withdraw through this API.",
                 "operationId": "55612a1e27ab9eec08d31a261aadd73d",
                 "parameters": [
                     {
@@ -5203,7 +5214,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Update card billing address",
-                "description": "Updates local billing fields only; does not call BSICards unless you add that integration.",
+                "description": "Updates local billing fields only; does not call the external card provider.",
                 "operationId": "2e815c5c206dbf101eab13f8c07587ed",
                 "parameters": [
                     {
@@ -5580,7 +5591,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Check card 3DS status",
-                "description": "Check 3DS status for merchant digital master card.",
+                "description": "Check 3DS status for the virtual Mastercard.",
                 "operationId": "bccd34939cfffff58821fd140475d2de",
                 "parameters": [
                     {
@@ -5638,7 +5649,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Get wallet OTP",
-                "description": "Fetch latest wallet OTP for merchant digital master card.",
+                "description": "Fetch latest wallet OTP for the virtual Mastercard.",
                 "operationId": "f69133f933115b13db0cf353e86c1889",
                 "parameters": [
                     {
@@ -5696,7 +5707,7 @@
                     "Virtual Cards"
                 ],
                 "summary": "Approve 3DS challenge",
-                "description": "Approve a pending 3DS challenge for merchant digital master card.",
+                "description": "Approve a pending 3DS challenge for the virtual Mastercard.",
                 "operationId": "7d4523efd359ee5c00732338cacafb14",
                 "parameters": [
                     {
@@ -6492,7 +6503,7 @@
         },
         {
             "name": "Virtual Cards",
-            "description": "Merchant Digital Master (BSICards). **Create** debits your in-app wallet (`naira_wallet` or `crypto_wallet`) using `VIRTUAL_CARD_*` env fees, then calls the provider. **Fund / freeze / unfreeze / terminate / 3DS / OTP** call BSICards merchant endpoints. Responses may include `provider_payload` and `fee_charged` on create."
+            "description": "Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using `VIRTUAL_CARD_*` fees, then calls the provider with `firstname`, `lastname`, `email`. **Fund / block / unblock / 3DS / wallet OTP** use provider `cardid` + `email`. Configure `MASTERCARD_API_*` env keys. Responses may include `provider_payload` and `fee_charged` on create."
         },
         {
             "name": "Authentication",

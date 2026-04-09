@@ -159,15 +159,15 @@ php artisan l5-swagger:generate
 - Health check: `GET /api/user` (requires authentication)
 - Swagger docs: `GET /api/documentation`
 
-**Virtual Cards (Merchant Digital Master)** — set fee-related env on the server, then regenerate Swagger:
+**Virtual cards (Mastercard reseller API)** — set fee-related env on the server, then regenerate Swagger:
 
 ```env
 VIRTUAL_CARD_CREATION_FEE_USD=3
 VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN=500
 VIRTUAL_CARD_USD_TO_NGN_RATE=1500
-BSICARDS_PUBLIC_KEY=
-BSICARDS_SECRET_KEY=
-BSICARDS_MERCHANT_BASE_URL=https://cards.bsigroup.tech/api
+MASTERCARD_API_PUBLIC_KEY=
+MASTERCARD_API_SECRET_KEY=
+MASTERCARD_API_MERCHANT_BASE_URL=https://pagocards.com/api
 ```
 
 After changing annotations or `.env` docs constants, run: `php artisan l5-swagger:generate`

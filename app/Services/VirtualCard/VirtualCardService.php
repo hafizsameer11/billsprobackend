@@ -14,13 +14,13 @@ use Illuminate\Support\Facades\DB;
 class VirtualCardService
 {
     public function __construct(
-        protected BsiCardsClient $bsiCardsClient,
+        protected MastercardApiClient $mastercardApiClient,
         protected WalletService $walletService,
         protected CryptoWalletService $cryptoWalletService,
     ) {}
 
     /**
-     * Create provider-backed merchant digital master card
+     * Create provider-backed virtual Mastercard
      */
     public function createCard(int $userId, array $data): array
     {
@@ -56,23 +56,30 @@ class VirtualCardService
             ];
         }
 
+        $accountEmail = $this->providerAccountEmail($user, $data);
+        $firstname = (string) ($data['firstname'] ?? $user->first_name ?? '');
+        if ($firstname === '') {
+            $firstname = trim((string) (explode(' ', (string) ($user->name ?? ''), 2)[0] ?? '')) ?: 'User';
+        }
+        $lastname = (string) ($data['lastname'] ?? $user->last_name ?? '');
+        if ($lastname === '') {
+            $parts = preg_split('/\s+/', (string) ($user->name ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $lastname = count($parts) > 1 ? trim(implode(' ', array_slice($parts, 1))) : '';
+            if ($lastname === '') {
+                $lastname = 'Cardholder';
+            }
+        }
+
+        // Mastercard reseller API: POST /api/mastercard/createcard — firstname, lastname, email
         $payload = [
-            'useremail' => $data['useremail'] ?? $user->email,
-            'firstname' => $data['firstname'] ?? $user->first_name ?? explode(' ', (string) $user->name)[0] ?? 'User',
-            'lastname' => $data['lastname'] ?? $user->last_name ?? trim(str_replace(($user->first_name ?? ''), '', (string) $user->name)) ?: 'Cardholder',
-            'dob' => $data['dob'],
-            'address1' => $data['address1'],
-            'postalcode' => $data['postalcode'],
-            'city' => $data['city'],
-            'country' => $data['country'],
-            'state' => $data['state'],
-            'countrycode' => $data['countrycode'],
-            'phone' => $data['phone'],
+            'firstname' => $firstname,
+            'lastname' => $lastname,
+            'email' => $accountEmail,
         ];
 
         try {
-            $response = $this->bsiCardsClient->createMerchantMasterCard($payload);
-        } catch (BsiCardsApiException $exception) {
+            $response = $this->mastercardApiClient->createMerchantMasterCard($payload);
+        } catch (MastercardApiException $exception) {
             return [
                 'success' => false,
                 'message' => $exception->getMessage(),
@@ -83,7 +90,7 @@ class VirtualCardService
         $resolvedProviderCardId = $this->extractProviderCardId($response);
         if (! $resolvedProviderCardId) {
             $resolvedProviderCardId = $this->resolveProviderCardIdFromList(
-                (string) $payload['useremail'],
+                (string) $payload['email'],
                 (string) $payload['firstname'],
                 (string) $payload['lastname']
             );
@@ -98,9 +105,11 @@ class VirtualCardService
         }
 
         try {
-            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd) {
+            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd, $data) {
                 $providerCardId = $resolvedProviderCardId;
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
+                $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
+                $cardColor = (string) ($data['card_color'] ?? 'green');
 
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
@@ -122,19 +131,28 @@ class VirtualCardService
                 $card = VirtualCard::updateOrCreate(
                     ['provider_card_id' => $providerCardId, 'user_id' => $userId],
                     [
-                        'card_name' => $cardSnapshot['card_name'],
+                        'card_name' => $displayName,
                         'card_number' => $cardSnapshot['card_number'],
                         'cvv' => $cardSnapshot['cvv'],
                         'expiry_month' => $cardSnapshot['expiry_month'],
                         'expiry_year' => $cardSnapshot['expiry_year'],
                         'card_type' => 'mastercard',
-                        'provider' => 'bsicards',
+                        'provider' => 'mastercard_api',
                         'provider_status' => $this->extractStatus($response),
-                        'card_color' => 'green',
+                        'card_color' => in_array($cardColor, ['green', 'brown', 'purple'], true) ? $cardColor : 'green',
                         'currency' => 'USD',
                         'balance' => $this->extractBalance($response),
                         'is_active' => true,
                         'is_frozen' => false,
+                        'billing_address_street' => $data['billing_address_street'] ?? null,
+                        'billing_address_city' => $data['billing_address_city'] ?? null,
+                        'billing_address_state' => $data['billing_address_state'] ?? null,
+                        'billing_address_country' => $data['billing_address_country'] ?? null,
+                        'billing_address_postal_code' => $data['billing_address_postal_code'] ?? null,
+                        'daily_spending_limit' => $data['daily_spending_limit'] ?? null,
+                        'monthly_spending_limit' => $data['monthly_spending_limit'] ?? null,
+                        'daily_transaction_limit' => $data['daily_transaction_limit'] ?? null,
+                        'monthly_transaction_limit' => $data['monthly_transaction_limit'] ?? null,
                         'metadata' => [
                             'source' => 'provider',
                             'payment_wallet_type' => $paymentWalletType,
@@ -159,7 +177,7 @@ class VirtualCardService
                     'fee' => $txFeeAmount,
                     'total_amount' => $txFeeAmount,
                     'reference' => 'CARD'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
-                    'description' => 'Merchant digital master card creation fee',
+                    'description' => 'Virtual Mastercard creation fee',
                     'metadata' => [
                         'card_id' => $card->id,
                         'provider_card_id' => $providerCardId,
@@ -212,7 +230,7 @@ class VirtualCardService
     }
 
     /**
-     * Fund provider-backed merchant digital master card.
+     * Fund provider-backed virtual Mastercard.
      */
     public function fundCard(int $userId, int $cardId, array $data): array
     {
@@ -229,17 +247,17 @@ class VirtualCardService
 
         $user = User::findOrFail($userId);
         $payload = [
-            'useremail' => $data['useremail'] ?? $user->email,
+            'email' => $this->providerAccountEmail($user, $data),
             'cardid' => $card->provider_card_id,
             'amount' => (float) $data['amount'],
         ];
 
         try {
-            $response = $this->bsiCardsClient->fundMerchantMasterCard($payload);
-        } catch (BsiCardsApiException $exception) {
+            $response = $this->mastercardApiClient->fundMerchantMasterCard($payload);
+        } catch (MastercardApiException $exception) {
             $context = $exception->getContext() ?? [];
             if (($context['response'] ?? null) === [] || $exception->getHttpStatus() === 404) {
-                $message = 'Provider funding endpoint is not available. Check BSICARDS_MERCHANT_MASTER_FUND_PATH and reseller API contract.';
+                $message = 'Provider funding endpoint is not available. Check MASTERCARD_API_FUND_PATH and reseller API contract.';
             } else {
                 $message = $exception->getMessage();
             }
@@ -274,7 +292,7 @@ class VirtualCardService
                 'fee' => 0,
                 'total_amount' => (float) $data['amount'],
                 'reference' => 'FUND'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
-                'description' => "Fund merchant digital master card with {$data['amount']} USD",
+                'description' => "Fund virtual Mastercard with {$data['amount']} USD",
                 'metadata' => [
                     'card_id' => $freshCard->id,
                     'provider_card_id' => $freshCard->provider_card_id,
@@ -316,13 +334,13 @@ class VirtualCardService
     }
 
     /**
-     * Merchant master withdrawal route currently unsupported by provider docs.
+     * Card withdrawal not supported by the current provider.
      */
     public function withdrawFromCard(int $userId, int $cardId, array $data): array
     {
         return [
             'success' => false,
-            'message' => 'Card withdrawal is not supported for merchant digital master flow.',
+            'message' => 'Card withdrawal is not supported for the current virtual card provider.',
         ];
     }
 
@@ -344,15 +362,15 @@ class VirtualCardService
 
         $user = User::findOrFail($userId);
         $payload = [
-            'useremail' => $user->email,
+            'email' => $user->email,
             'cardid' => $card->provider_card_id,
         ];
 
         try {
             $response = $freeze
-                ? $this->bsiCardsClient->blockMerchantMasterCard($payload)
-                : $this->bsiCardsClient->unblockMerchantMasterCard($payload);
-        } catch (BsiCardsApiException $exception) {
+                ? $this->mastercardApiClient->blockMerchantMasterCard($payload)
+                : $this->mastercardApiClient->unblockMerchantMasterCard($payload);
+        } catch (MastercardApiException $exception) {
             return [
                 'success' => false,
                 'message' => $exception->getMessage(),
@@ -384,7 +402,7 @@ class VirtualCardService
         $user = User::findOrFail($userId);
 
         try {
-            $response = $this->bsiCardsClient->getMerchantMasterCards(['useremail' => $user->email]);
+            $response = $this->mastercardApiClient->getMerchantMasterCards(['email' => $user->email]);
             $cards = $this->extractCardsFromListResponse($response);
 
             foreach ($cards as $providerCard) {
@@ -399,7 +417,7 @@ class VirtualCardService
                             'cvv' => $snapshot['cvv'],
                             'expiry_month' => $snapshot['expiry_month'],
                             'expiry_year' => $snapshot['expiry_year'],
-                            'provider' => 'bsicards',
+                            'provider' => 'mastercard_api',
                             'provider_status' => (string) ($providerCard['status'] ?? 'active'),
                             'currency' => 'USD',
                             'balance' => (float) ($providerCard['balance'] ?? 0),
@@ -408,7 +426,7 @@ class VirtualCardService
                     );
                 }
             }
-        } catch (BsiCardsApiException) {
+        } catch (MastercardApiException) {
             // Fall back to cached cards if provider fails.
         }
 
@@ -433,8 +451,8 @@ class VirtualCardService
 
         $user = User::findOrFail($userId);
         try {
-            $response = $this->bsiCardsClient->getMerchantMasterCard([
-                'useremail' => $user->email,
+            $response = $this->mastercardApiClient->getMerchantMasterCard([
+                'email' => $user->email,
                 'cardid' => $card->provider_card_id,
             ]);
 
@@ -449,7 +467,7 @@ class VirtualCardService
                 'provider_status' => $this->extractStatus($response, $card->provider_status),
                 'provider_payload' => $response,
             ]);
-        } catch (BsiCardsApiException) {
+        } catch (MastercardApiException) {
             // return cached card
         }
 
@@ -464,39 +482,42 @@ class VirtualCardService
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
         if ($card && $card->provider_card_id) {
             $user = User::findOrFail($userId);
-            try {
-                $providerResponse = $this->bsiCardsClient->merchantMasterTransactions([
-                    'useremail' => $user->email,
-                    'cardid' => $card->provider_card_id,
-                ]);
-                $providerTransactions = $providerResponse['data'] ?? [];
-                if (is_array($providerTransactions)) {
-                    foreach ($providerTransactions as $providerTransaction) {
-                        if (! is_array($providerTransaction)) {
-                            continue;
+            $txPath = (string) config('mastercard.endpoints.merchant_master_transactions');
+            if ($txPath !== '') {
+                try {
+                    $providerResponse = $this->mastercardApiClient->merchantMasterTransactions([
+                        'email' => $user->email,
+                        'cardid' => $card->provider_card_id,
+                    ]);
+                    $providerTransactions = $providerResponse['data'] ?? [];
+                    if (is_array($providerTransactions)) {
+                        foreach ($providerTransactions as $providerTransaction) {
+                            if (! is_array($providerTransaction)) {
+                                continue;
+                            }
+                            VirtualCardTransaction::updateOrCreate(
+                                [
+                                    'virtual_card_id' => $cardId,
+                                    'provider_transaction_id' => (string) ($providerTransaction['id'] ?? $providerTransaction['reference'] ?? ''),
+                                ],
+                                [
+                                    'user_id' => $userId,
+                                    'type' => (string) ($providerTransaction['type'] ?? 'provider'),
+                                    'status' => (string) ($providerTransaction['status'] ?? 'completed'),
+                                    'currency' => (string) ($providerTransaction['currency'] ?? 'USD'),
+                                    'amount' => (float) ($providerTransaction['amount'] ?? 0),
+                                    'fee' => (float) ($providerTransaction['fee'] ?? 0),
+                                    'total_amount' => (float) ($providerTransaction['total_amount'] ?? $providerTransaction['amount'] ?? 0),
+                                    'reference' => (string) ($providerTransaction['reference'] ?? null),
+                                    'description' => (string) ($providerTransaction['description'] ?? 'Provider card transaction'),
+                                    'provider_payload' => $providerTransaction,
+                                ]
+                            );
                         }
-                        VirtualCardTransaction::updateOrCreate(
-                            [
-                                'virtual_card_id' => $cardId,
-                                'provider_transaction_id' => (string) ($providerTransaction['id'] ?? $providerTransaction['reference'] ?? ''),
-                            ],
-                            [
-                                'user_id' => $userId,
-                                'type' => (string) ($providerTransaction['type'] ?? 'provider'),
-                                'status' => (string) ($providerTransaction['status'] ?? 'completed'),
-                                'currency' => (string) ($providerTransaction['currency'] ?? 'USD'),
-                                'amount' => (float) ($providerTransaction['amount'] ?? 0),
-                                'fee' => (float) ($providerTransaction['fee'] ?? 0),
-                                'total_amount' => (float) ($providerTransaction['total_amount'] ?? $providerTransaction['amount'] ?? 0),
-                                'reference' => (string) ($providerTransaction['reference'] ?? null),
-                                'description' => (string) ($providerTransaction['description'] ?? 'Provider card transaction'),
-                                'provider_payload' => $providerTransaction,
-                            ]
-                        );
                     }
+                } catch (MastercardApiException) {
+                    // return local cache
                 }
-            } catch (BsiCardsApiException) {
-                // return local cache
             }
         }
 
@@ -542,11 +563,11 @@ class VirtualCardService
 
         $user = User::findOrFail($userId);
         try {
-            $response = $this->bsiCardsClient->terminateMerchantMasterCard([
-                'useremail' => $user->email,
+            $response = $this->mastercardApiClient->terminateMerchantMasterCard([
+                'email' => $user->email,
                 'cardid' => $card->provider_card_id,
             ]);
-        } catch (BsiCardsApiException $exception) {
+        } catch (MastercardApiException $exception) {
             return [
                 'success' => false,
                 'message' => $exception->getMessage(),
@@ -571,12 +592,12 @@ class VirtualCardService
 
     public function check3ds(int $userId, int $cardId): array
     {
-        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->bsiCardsClient->check3ds($payload));
+        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->mastercardApiClient->check3ds($payload));
     }
 
     public function checkWalletOtp(int $userId, int $cardId): array
     {
-        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->bsiCardsClient->checkWallet($payload));
+        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->mastercardApiClient->checkWallet($payload));
     }
 
     public function approve3ds(int $userId, int $cardId, string $eventId): array
@@ -584,7 +605,7 @@ class VirtualCardService
         return $this->invokeProviderCardAction(
             $userId,
             $cardId,
-            fn (array $payload) => $this->bsiCardsClient->approve3ds(array_merge($payload, ['eventId' => $eventId]))
+            fn (array $payload) => $this->mastercardApiClient->approve3ds(array_merge($payload, ['eventId' => $eventId]))
         );
     }
 
@@ -596,10 +617,10 @@ class VirtualCardService
         }
 
         $user = User::findOrFail($userId);
-        $payload = ['useremail' => $user->email, 'cardid' => $card->provider_card_id];
+        $payload = ['email' => $user->email, 'cardid' => $card->provider_card_id];
         try {
             $response = $apiAction($payload);
-        } catch (BsiCardsApiException $exception) {
+        } catch (MastercardApiException $exception) {
             return ['success' => false, 'message' => $exception->getMessage()];
         }
 
@@ -621,10 +642,10 @@ class VirtualCardService
     protected function resolveProviderCardIdFromList(string $userEmail, string $firstName, string $lastName): ?string
     {
         try {
-            $listResponse = $this->bsiCardsClient->getMerchantMasterCards([
-                'useremail' => $userEmail,
+            $listResponse = $this->mastercardApiClient->getMerchantMasterCards([
+                'email' => $userEmail,
             ]);
-        } catch (BsiCardsApiException) {
+        } catch (MastercardApiException) {
             return null;
         }
 
@@ -739,5 +760,13 @@ class VirtualCardService
         }
 
         return array_values(array_filter($cards, 'is_array'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected function providerAccountEmail(User $user, array $data): string
+    {
+        return (string) ($data['email'] ?? $data['useremail'] ?? $user->email);
     }
 }

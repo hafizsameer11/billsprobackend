@@ -16,7 +16,7 @@ use OpenApi\Attributes as OA;
 
 #[OA\Tag(
     name: 'Virtual Cards',
-    description: 'Merchant Digital Master (BSICards). **Create** debits your in-app wallet (`naira_wallet` or `crypto_wallet`) using `VIRTUAL_CARD_*` env fees, then calls the provider. **Fund / freeze / unfreeze / terminate / 3DS / OTP** call BSICards merchant endpoints. Responses may include `provider_payload` and `fee_charged` on create.'
+    description: 'Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using `VIRTUAL_CARD_*` fees, then calls the provider with `firstname`, `lastname`, `email`. **Fund / block / unblock / 3DS / wallet OTP** use provider `cardid` + `email`. Configure `MASTERCARD_API_*` env keys. Responses may include `provider_payload` and `fee_charged` on create.'
 )]
 class VirtualCardController extends Controller
 {
@@ -30,7 +30,7 @@ class VirtualCardController extends Controller
     /**
      * Get user's virtual cards
      */
-    #[OA\Get(path: '/api/virtual-cards', summary: 'List virtual cards', description: 'Returns cached merchant digital master cards for the user and syncs with the provider when possible.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Get(path: '/api/virtual-cards', summary: 'List virtual cards', description: 'Returns cached virtual Mastercards for the user and syncs with the provider when possible.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Response(response: 200, description: 'Cards retrieved successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'array', items: new OA\Items(type: 'object'))]))]
     #[OA\Response(response: 401, description: 'Unauthenticated')]
     public function index(Request $request): JsonResponse
@@ -54,32 +54,33 @@ class VirtualCardController extends Controller
      */
     #[OA\Post(
         path: '/api/virtual-cards',
-        summary: 'Create merchant digital master card',
-        description: 'Issues a BSICards Digital Master card. **Wallet fee (required):** send `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. '
+        summary: 'Create virtual Mastercard',
+        description: 'Issues a virtual Mastercard. **Wallet fee (required):** `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. '
             .'Naira fee (NGN) = `VIRTUAL_CARD_CREATION_FEE_USD` × `VIRTUAL_CARD_USD_TO_NGN_RATE` + `VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN`. '
             .'Crypto fee (USD equivalent) matches the same total. Balance is checked **before** calling the provider; fee is debited **after** successful issue. '
-            .'**Provider KYC/identity fields** (required): `dob`, `address1`, `postalcode`, `city`, `state`, `country` (ISO-3166 alpha-2), `countrycode`, `phone`.',
+            .'**Provider body:** `firstname`, `lastname`, `email` (defaults from the authenticated user; optional `email` / `useremail` override). KYC fields are optional for local/billing only.',
         security: [['sanctum' => []]],
         tags: ['Virtual Cards'],
     )]
     #[OA\RequestBody(
         required: true,
         content: new OA\JsonContent(
-            required: ['firstname', 'lastname', 'dob', 'address1', 'city', 'state', 'country', 'phone', 'countrycode', 'postalcode', 'payment_wallet_type'],
+            required: ['payment_wallet_type'],
             properties: [
-                new OA\Property(property: 'firstname', type: 'string', example: 'John'),
-                new OA\Property(property: 'lastname', type: 'string', example: 'Doe'),
-                new OA\Property(property: 'dob', description: 'YYYY-MM-DD', type: 'string', format: 'date', example: '1979-12-17'),
-                new OA\Property(property: 'address1', type: 'string', example: '128 city road'),
-                new OA\Property(property: 'postalcode', type: 'string', example: 'ec1v2nx'),
-                new OA\Property(property: 'city', type: 'string', example: 'london'),
-                new OA\Property(property: 'country', description: 'ISO-3166 alpha-2', type: 'string', example: 'GB'),
-                new OA\Property(property: 'state', type: 'string', example: 'london'),
-                new OA\Property(property: 'countrycode', description: 'Phone country code without +', type: 'string', example: '44'),
-                new OA\Property(property: 'phone', description: 'Digits (per provider sample)', type: 'string', example: '911266016115'),
+                new OA\Property(property: 'firstname', type: 'string', nullable: true, example: 'John'),
+                new OA\Property(property: 'lastname', type: 'string', nullable: true, example: 'Doe'),
+                new OA\Property(property: 'dob', description: 'YYYY-MM-DD', type: 'string', format: 'date', nullable: true, example: '1979-12-17'),
+                new OA\Property(property: 'address1', type: 'string', nullable: true, example: '128 city road'),
+                new OA\Property(property: 'postalcode', type: 'string', nullable: true, example: 'ec1v2nx'),
+                new OA\Property(property: 'city', type: 'string', nullable: true, example: 'london'),
+                new OA\Property(property: 'country', description: 'ISO-3166 alpha-2', type: 'string', nullable: true, example: 'GB'),
+                new OA\Property(property: 'state', type: 'string', nullable: true, example: 'london'),
+                new OA\Property(property: 'countrycode', description: 'Phone country code without +', type: 'string', nullable: true, example: '44'),
+                new OA\Property(property: 'phone', type: 'string', nullable: true, example: '911266016115'),
                 new OA\Property(property: 'payment_wallet_type', description: 'Where to debit the card creation fee', type: 'string', enum: ['naira_wallet', 'crypto_wallet'], example: 'naira_wallet'),
                 new OA\Property(property: 'payment_wallet_currency', description: 'Fiat wallet currency when using naira_wallet (default NGN)', type: 'string', nullable: true, example: 'NGN'),
-                new OA\Property(property: 'useremail', description: 'Overrides user email sent to provider', type: 'string', format: 'email', nullable: true, example: 'merchantuser@billspro.hmstech.org'),
+                new OA\Property(property: 'email', description: 'Overrides email sent to provider', type: 'string', format: 'email', nullable: true),
+                new OA\Property(property: 'useremail', description: 'Alias of email for provider', type: 'string', format: 'email', nullable: true, example: 'merchantuser@billspro.hmstech.org'),
                 new OA\Property(property: 'card_name', type: 'string', nullable: true, example: 'John Doe Merchant Card'),
                 new OA\Property(property: 'card_color', type: 'string', nullable: true, enum: ['green', 'brown', 'purple'], example: 'green'),
                 new OA\Property(property: 'billing_address_street', type: 'string', nullable: true),
@@ -142,7 +143,7 @@ class VirtualCardController extends Controller
     /**
      * Get card details
      */
-    #[OA\Get(path: '/api/virtual-cards/{id}', summary: 'Get card details', description: 'Fetches merchant digital master card details; refreshes from provider when possible. May include masked PAN/CVV in local cache.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Get(path: '/api/virtual-cards/{id}', summary: 'Get card details', description: 'Fetches virtual Mastercard details; refreshes from provider when possible. May include masked PAN/CVV in local cache.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\Response(response: 200, description: 'Card details retrieved successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
     #[OA\Response(response: 404, description: 'Card not found')]
@@ -171,7 +172,7 @@ class VirtualCardController extends Controller
     /**
      * Fund virtual card
      */
-    #[OA\Post(path: '/api/virtual-cards/{id}/fund', summary: 'Fund virtual card', description: 'Calls BSICards merchant fund endpoint (`BSICARDS_MERCHANT_MASTER_FUND_PATH`). `amount` is sent to the provider; optional `useremail` overrides the authenticated user email. `payment_wallet_type` is optional metadata (fund is charged by provider / merchant balance, not debited from app naira/crypto in this flow).', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Post(path: '/api/virtual-cards/{id}/fund', summary: 'Fund virtual card', description: 'Calls provider `fundcard` with `cardid`, `email`, `amount` (funding wallet / fees per provider). Optional `email` or `useremail` overrides the authenticated user email.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Local virtual card id', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(
         required: true,
@@ -179,7 +180,8 @@ class VirtualCardController extends Controller
             required: ['amount'],
             properties: [
                 new OA\Property(property: 'amount', description: 'Fund amount (provider rules apply)', type: 'number', format: 'float', example: 50.0),
-                new OA\Property(property: 'useremail', description: 'Email sent as useremail to provider', type: 'string', format: 'email', nullable: true),
+                new OA\Property(property: 'email', description: 'Email sent to provider', type: 'string', format: 'email', nullable: true),
+                new OA\Property(property: 'useremail', description: 'Alias of email for provider', type: 'string', format: 'email', nullable: true),
                 new OA\Property(property: 'payment_wallet_type', description: 'Optional label for client tracking', type: 'string', nullable: true, enum: ['naira_wallet', 'crypto_wallet', 'provider_balance']),
                 new OA\Property(property: 'payment_wallet_currency', type: 'string', nullable: true, example: 'USD'),
             ],
@@ -217,7 +219,7 @@ class VirtualCardController extends Controller
     /**
      * Withdraw from virtual card
      */
-    #[OA\Post(path: '/api/virtual-cards/{id}/withdraw', summary: 'Withdraw from virtual card', description: 'Legacy endpoint. Merchant Digital Master provider flow currently does not support direct withdraw through this API.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Post(path: '/api/virtual-cards/{id}/withdraw', summary: 'Withdraw from virtual card', description: 'Legacy endpoint. The current provider flow does not support direct withdraw through this API.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ['amount'], properties: [new OA\Property(property: 'amount', type: 'number', format: 'float', example: 10.00, description: 'Amount in USD')]))]
     #[OA\Response(response: 200, description: 'Backward-compatibility response shape', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
@@ -311,7 +313,7 @@ class VirtualCardController extends Controller
     /**
      * Update card billing address
      */
-    #[OA\Put(path: '/api/virtual-cards/{id}/billing-address', summary: 'Update card billing address', description: 'Updates local billing fields only; does not call BSICards unless you add that integration.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Put(path: '/api/virtual-cards/{id}/billing-address', summary: 'Update card billing address', description: 'Updates local billing fields only; does not call the external card provider.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(required: false, content: new OA\JsonContent(properties: [new OA\Property(property: 'billing_address_street', type: 'string', nullable: true), new OA\Property(property: 'billing_address_city', type: 'string', nullable: true), new OA\Property(property: 'billing_address_state', type: 'string', nullable: true), new OA\Property(property: 'billing_address_country', type: 'string', nullable: true), new OA\Property(property: 'billing_address_postal_code', type: 'string', nullable: true)]))]
     #[OA\Response(response: 200, description: 'Billing address updated successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
@@ -427,6 +429,9 @@ class VirtualCardController extends Controller
     {
         try {
             $result = $this->virtualCardService->toggleFreeze($request->user()->id, $id, true);
+            if (! ($result['success'] ?? false)) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to freeze card', $result['status'] ?? 400);
+            }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card frozen successfully.');
         } catch (\Exception $e) {
@@ -452,6 +457,9 @@ class VirtualCardController extends Controller
     {
         try {
             $result = $this->virtualCardService->toggleFreeze($request->user()->id, $id, false);
+            if (! ($result['success'] ?? false)) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to unfreeze card', $result['status'] ?? 400);
+            }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card unfrozen successfully.');
         } catch (\Exception $e) {
@@ -496,7 +504,7 @@ class VirtualCardController extends Controller
     /**
      * Check 3DS status
      */
-    #[OA\Get(path: '/api/virtual-cards/{id}/check-3ds', summary: 'Check card 3DS status', description: 'Check 3DS status for merchant digital master card.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Get(path: '/api/virtual-cards/{id}/check-3ds', summary: 'Check card 3DS status', description: 'Check 3DS status for the virtual Mastercard.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\Response(response: 200, description: '3DS status fetched successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'message', type: 'string', example: '3DS status fetched successfully'), new OA\Property(property: 'data', type: 'object')]))]
     #[OA\Response(response: 400, description: 'Provider rejected request')]
@@ -524,7 +532,7 @@ class VirtualCardController extends Controller
     /**
      * Get wallet OTP
      */
-    #[OA\Get(path: '/api/virtual-cards/{id}/check-wallet', summary: 'Get wallet OTP', description: 'Fetch latest wallet OTP for merchant digital master card.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Get(path: '/api/virtual-cards/{id}/check-wallet', summary: 'Get wallet OTP', description: 'Fetch latest wallet OTP for the virtual Mastercard.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\Response(response: 200, description: 'Wallet OTP fetched successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'message', type: 'string', example: 'Wallet OTP fetched successfully'), new OA\Property(property: 'data', type: 'object')]))]
     #[OA\Response(response: 400, description: 'Provider rejected request')]
@@ -552,7 +560,7 @@ class VirtualCardController extends Controller
     /**
      * Approve 3DS
      */
-    #[OA\Post(path: '/api/virtual-cards/{id}/approve-3ds', summary: 'Approve 3DS challenge', description: 'Approve a pending 3DS challenge for merchant digital master card.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Post(path: '/api/virtual-cards/{id}/approve-3ds', summary: 'Approve 3DS challenge', description: 'Approve a pending 3DS challenge for the virtual Mastercard.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ['event_id'], properties: [new OA\Property(property: 'event_id', type: 'string', example: '3ds-3f41728f-cfd1-4cca-8404-bc8f5e9d71d6')]))]
     #[OA\Response(response: 200, description: '3DS approved successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'message', type: 'string', example: '3DS approved successfully'), new OA\Property(property: 'data', type: 'object')]))]

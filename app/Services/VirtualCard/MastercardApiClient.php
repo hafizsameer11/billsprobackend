@@ -5,10 +5,10 @@ namespace App\Services\VirtualCard;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
-class BsiCardsClient
+class MastercardApiClient
 {
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function createMerchantMasterCard(array $payload): array
     {
@@ -16,7 +16,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function getMerchantMasterCards(array $payload): array
     {
@@ -24,7 +24,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function getMerchantMasterCard(array $payload): array
     {
@@ -32,7 +32,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function fundMerchantMasterCard(array $payload): array
     {
@@ -40,7 +40,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function blockMerchantMasterCard(array $payload): array
     {
@@ -48,7 +48,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function unblockMerchantMasterCard(array $payload): array
     {
@@ -56,7 +56,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function terminateMerchantMasterCard(array $payload): array
     {
@@ -64,7 +64,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function merchantMasterTransactions(array $payload): array
     {
@@ -72,7 +72,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function check3ds(array $payload): array
     {
@@ -80,7 +80,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function checkWallet(array $payload): array
     {
@@ -88,7 +88,7 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     public function approve3ds(array $payload): array
     {
@@ -96,30 +96,30 @@ class BsiCardsClient
     }
 
     /**
-     * @throws BsiCardsApiException
+     * @throws MastercardApiException
      */
     protected function requestMerchant(string $endpointKey, array $payload): array
     {
-        $path = (string) config("bsicards.endpoints.{$endpointKey}");
-        $baseUrl = (string) config('bsicards.merchant_base_url');
+        $path = (string) config("mastercard.endpoints.{$endpointKey}");
+        $baseUrl = (string) config('mastercard.merchant_base_url');
 
         if ($path === '') {
-            throw new BsiCardsApiException("BSICards endpoint is not configured for key: {$endpointKey}", 500);
+            throw new MastercardApiException("Virtual card API endpoint is not configured for key: {$endpointKey}", 500);
         }
 
         $url = $this->buildUrl($baseUrl, $path);
 
         try {
-            $response = Http::timeout((int) config('bsicards.timeout', 30))
+            $response = Http::timeout((int) config('mastercard.timeout', 30))
                 ->acceptJson()
                 ->asJson()
                 ->withHeaders([
-                    'publickey' => (string) config('bsicards.public_key'),
-                    'secretkey' => (string) config('bsicards.secret_key'),
+                    'publickey' => (string) config('mastercard.public_key'),
+                    'secretkey' => (string) config('mastercard.secret_key'),
                 ])
                 ->post($url, $payload);
         } catch (ConnectionException $exception) {
-            throw new BsiCardsApiException('Unable to connect to BSICards provider.', 503, [
+            throw new MastercardApiException('Unable to connect to virtual card provider.', 503, [
                 'endpoint_key' => $endpointKey,
                 'url' => $url,
                 'error' => $exception->getMessage(),
@@ -127,13 +127,13 @@ class BsiCardsClient
         }
 
         $data = $response->json();
-        if (!is_array($data)) {
+        if (! is_array($data)) {
             $data = [];
         }
 
-        if (!$response->ok()) {
+        if (! $response->ok()) {
             $message = $this->normalizeMessage($data['message'] ?? null);
-            throw new BsiCardsApiException(
+            throw new MastercardApiException(
                 $message,
                 $response->status(),
                 [
@@ -173,11 +173,11 @@ class BsiCardsClient
             }
         }
 
-        return 'BSICards request failed.';
+        return 'Virtual card provider request failed.';
     }
 
     protected function buildUrl(string $baseUrl, string $path): string
     {
-        return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
+        return rtrim($baseUrl, '/').'/'.ltrim($path, '/');
     }
 }

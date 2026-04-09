@@ -4,7 +4,7 @@ namespace App\Services\VirtualCard;
 
 use RuntimeException;
 
-class BsiCardsApiException extends RuntimeException
+class MastercardApiException extends RuntimeException
 {
     public function __construct(
         string $message,

@@ -14,6 +14,7 @@ class FundCardRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'email' => 'nullable|email|max:255',
             'useremail' => 'nullable|email|max:255',
             'amount' => 'required|numeric|min:0.01',
             'payment_wallet_type' => 'nullable|string|in:naira_wallet,crypto_wallet,provider_balance',
