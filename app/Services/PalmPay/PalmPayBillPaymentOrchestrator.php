@@ -191,19 +191,9 @@ class PalmPayBillPaymentOrchestrator
             return '';
         }
 
-        if (str_starts_with($digits, '234') && strlen($digits) >= 13) {
-            return $digits;
-        }
+        $last10 = strlen($digits) >= 10 ? substr($digits, -10) : $digits;
 
-        if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
-            return '234'.substr($digits, 1);
-        }
-
-        if (strlen($digits) === 10) {
-            return '234'.$digits;
-        }
-
-        return $digits;
+        return '02340'.$last10;
     }
 
     /**
