@@ -46,15 +46,15 @@ class PalmPayAuthService
         $signString = $this->buildSignString($params);
         $md5Upper = strtoupper(md5($signString));
 
-        $privateKey = $this->normalizedPrivateKey();
-        if ($privateKey === '') {
+        $privateKey = $this->resolvedPrivateKey();
+        if ($privateKey === null) {
             throw new RuntimeException('PALMPAY_PRIVATE_KEY is not configured.');
         }
 
         $signature = '';
         $ok = openssl_sign($md5Upper, $signature, $privateKey, OPENSSL_ALGO_SHA1);
         if (! $ok) {
-            throw new RuntimeException('OpenSSL could not sign PalmPay payload.');
+            throw new RuntimeException('OpenSSL could not sign PalmPay payload. Check PALMPAY_PRIVATE_KEY format (PEM or base64-encoded PEM).');
         }
 
         return base64_encode($signature);
@@ -102,12 +102,38 @@ class PalmPayAuthService
         ];
     }
 
-    private function normalizedPrivateKey(): string
+    /**
+     * @return resource|\OpenSSLAsymmetricKey|null
+     */
+    private function resolvedPrivateKey()
     {
         $key = (string) Config::get('palmpay.private_key', '');
-        $key = str_replace('\\n', "\n", $key);
+        $key = trim(str_replace('\\n', "\n", $key));
 
-        return trim($key);
+        if ($key === '') {
+            return null;
+        }
+
+        $candidate = $key;
+        if (! str_contains($candidate, 'BEGIN')) {
+            $decoded = base64_decode($candidate, true);
+            if (is_string($decoded) && $decoded !== '') {
+                $candidate = trim(str_replace('\\n', "\n", $decoded));
+            }
+        }
+
+        if (! str_contains($candidate, 'BEGIN')) {
+            $candidate = "-----BEGIN PRIVATE KEY-----\n".
+                chunk_split(preg_replace('/\s+/', '', $candidate) ?? '', 64, "\n").
+                "-----END PRIVATE KEY-----";
+        }
+
+        $res = openssl_pkey_get_private($candidate);
+        if ($res === false) {
+            return null;
+        }
+
+        return $res;
     }
 
     private function normalizedPublicKey(): string
