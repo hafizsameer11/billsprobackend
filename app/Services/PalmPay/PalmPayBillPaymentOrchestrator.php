@@ -38,7 +38,10 @@ class PalmPayBillPaymentOrchestrator
             throw new RuntimeException('Invalid PIN');
         }
 
-        $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) ($data['rechargeAccount'] ?? ''));
+        $normalizedRechargeAccount = $this->normalizeRechargeAccount(
+            (string) ($data['rechargeAccount'] ?? ''),
+            $sceneCode
+        );
         if ($normalizedRechargeAccount === '') {
             throw new RuntimeException('Invalid recharge account');
         }
@@ -189,8 +192,13 @@ class PalmPayBillPaymentOrchestrator
         }, 5);
     }
 
-    private function normalizeRechargeAccount(string $value): string
+    private function normalizeRechargeAccount(string $value, string $sceneCode = ''): string
     {
+        $scene = strtolower(trim($sceneCode));
+        if ($scene === 'betting') {
+            return trim($value);
+        }
+
         $digits = preg_replace('/\D+/', '', $value) ?? '';
         if ($digits === '') {
             return '';

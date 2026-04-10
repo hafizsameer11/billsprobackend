@@ -72,7 +72,10 @@ class PalmPayBillPaymentController extends Controller
         ]);
 
         try {
-            $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) $request->input('rechargeAccount'));
+            $normalizedRechargeAccount = $this->normalizeRechargeAccount(
+                (string) $request->input('rechargeAccount'),
+                (string) $request->input('sceneCode')
+            );
             $extra = array_filter([
                 'billerId' => $request->input('billerId'),
                 'itemId' => $request->input('itemId'),
@@ -109,7 +112,10 @@ class PalmPayBillPaymentController extends Controller
         ]);
 
         try {
-            $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) $request->input('rechargeAccount'));
+            $normalizedRechargeAccount = $this->normalizeRechargeAccount(
+                (string) $request->input('rechargeAccount'),
+                (string) $request->input('sceneCode')
+            );
             $result = $this->orchestrator->createOrder($request->user()->id, [
                 'sceneCode' => $request->input('sceneCode'),
                 'billerId' => $request->input('billerId'),
@@ -131,8 +137,13 @@ class PalmPayBillPaymentController extends Controller
         }
     }
 
-    private function normalizeRechargeAccount(string $value): string
+    private function normalizeRechargeAccount(string $value, string $sceneCode = ''): string
     {
+        $scene = strtolower(trim($sceneCode));
+        if ($scene === 'betting') {
+            return trim($value);
+        }
+
         $digits = preg_replace('/\D+/', '', $value) ?? '';
         if ($digits === '') {
             return '';
