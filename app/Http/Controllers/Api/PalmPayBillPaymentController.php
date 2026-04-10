@@ -72,6 +72,7 @@ class PalmPayBillPaymentController extends Controller
         ]);
 
         try {
+            $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) $request->input('rechargeAccount'));
             $extra = array_filter([
                 'billerId' => $request->input('billerId'),
                 'itemId' => $request->input('itemId'),
@@ -79,13 +80,13 @@ class PalmPayBillPaymentController extends Controller
 
             $data = $this->billApi->queryRechargeAccount(
                 $request->input('sceneCode'),
-                $request->input('rechargeAccount'),
+                $normalizedRechargeAccount,
                 $extra
             );
 
             return ResponseHelper::success([
                 'sceneCode' => $request->input('sceneCode'),
-                'rechargeAccount' => $request->input('rechargeAccount'),
+                'rechargeAccount' => $normalizedRechargeAccount,
                 'result' => $data,
             ], 'Verification completed.');
         } catch (\Throwable $e) {
@@ -108,11 +109,12 @@ class PalmPayBillPaymentController extends Controller
         ]);
 
         try {
+            $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) $request->input('rechargeAccount'));
             $result = $this->orchestrator->createOrder($request->user()->id, [
                 'sceneCode' => $request->input('sceneCode'),
                 'billerId' => $request->input('billerId'),
                 'itemId' => $request->input('itemId'),
-                'rechargeAccount' => $request->input('rechargeAccount'),
+                'rechargeAccount' => $normalizedRechargeAccount,
                 'amount' => (float) $request->input('amount'),
                 'currency' => $request->input('currency', 'NGN'),
                 'pin' => $request->input('pin'),
@@ -124,5 +126,31 @@ class PalmPayBillPaymentController extends Controller
 
             return ResponseHelper::error($e->getMessage(), 400);
         }
+    }
+
+    private function normalizeRechargeAccount(string $value): string
+    {
+        $digits = preg_replace('/\D+/', '', $value) ?? '';
+        if ($digits === '') {
+            return '';
+        }
+
+        if (str_starts_with($digits, '2340') && strlen($digits) >= 14) {
+            return $digits;
+        }
+
+        if (str_starts_with($digits, '234') && strlen($digits) === 13) {
+            return '2340'.substr($digits, 3);
+        }
+
+        if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            return '2340'.substr($digits, 1);
+        }
+
+        if (strlen($digits) === 10) {
+            return '2340'.$digits;
+        }
+
+        return $digits;
     }
 }

@@ -38,6 +38,12 @@ class PalmPayBillPaymentOrchestrator
             throw new RuntimeException('Invalid PIN');
         }
 
+        $normalizedRechargeAccount = $this->normalizeRechargeAccount((string) ($data['rechargeAccount'] ?? ''));
+        if ($normalizedRechargeAccount === '') {
+            throw new RuntimeException('Invalid recharge account');
+        }
+        $data['rechargeAccount'] = $normalizedRechargeAccount;
+
         $amount = (float) $data['amount'];
         if ($amount <= 0) {
             throw new RuntimeException('Invalid amount');
@@ -176,6 +182,32 @@ class PalmPayBillPaymentOrchestrator
                 $w->increment('balance', $amount);
             }
         }, 5);
+    }
+
+    private function normalizeRechargeAccount(string $value): string
+    {
+        $digits = preg_replace('/\D+/', '', $value) ?? '';
+        if ($digits === '') {
+            return '';
+        }
+
+        if (str_starts_with($digits, '2340') && strlen($digits) >= 14) {
+            return $digits;
+        }
+
+        if (str_starts_with($digits, '234') && strlen($digits) === 13) {
+            return '2340'.substr($digits, 3);
+        }
+
+        if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            return '2340'.substr($digits, 1);
+        }
+
+        if (strlen($digits) === 10) {
+            return '2340'.$digits;
+        }
+
+        return $digits;
     }
 
     /**
