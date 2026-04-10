@@ -597,7 +597,7 @@ class VirtualCardService
         $user = User::findOrFail($userId);
         try {
             $response = $this->mastercardApiClient->getMerchantMasterCard([
-                'email' => $user->email,
+                'email' => $this->resolveProviderAccountEmail($user, $card),
                 'cardid' => $card->provider_card_id,
             ]);
 
@@ -612,6 +612,9 @@ class VirtualCardService
                 'provider_status' => $this->extractStatus($response, $card->provider_status),
                 'provider_payload' => $response,
             ]);
+
+            // Provider may embed recent card transactions in card-details response.
+            $this->syncProviderTransactions($userId, $cardId, $response);
         } catch (MastercardApiException) {
             // return cached card
         }
@@ -632,36 +635,18 @@ class VirtualCardService
                     'email' => $this->resolveProviderAccountEmail($user, $card),
                     'cardid' => $card->provider_card_id,
                 ]);
-                $providerTransactions = $this->extractProviderTransactionsFromResponse($providerResponse);
-                foreach ($providerTransactions as $providerTransaction) {
-                    if (! is_array($providerTransaction)) {
-                        continue;
-                    }
-
-                    $normalized = $this->normalizeProviderTransaction($providerTransaction);
-
-                    VirtualCardTransaction::updateOrCreate(
-                        [
-                            'virtual_card_id' => $cardId,
-                            'provider_transaction_id' => $normalized['provider_transaction_id'],
-                        ],
-                        [
-                            'user_id' => $userId,
-                            'type' => $normalized['type'],
-                            'status' => $normalized['status'],
-                            'currency' => $normalized['currency'],
-                            'amount' => $normalized['amount'],
-                            'fee' => $normalized['fee'],
-                            'total_amount' => $normalized['total_amount'],
-                            'reference' => $normalized['reference'],
-                            'description' => $normalized['description'],
-                            'metadata' => $normalized['metadata'],
-                            'provider_payload' => $providerTransaction,
-                        ]
-                    );
-                }
+                $this->syncProviderTransactions($userId, $cardId, $providerResponse);
             } catch (MastercardApiException) {
-                // return local cache
+                // If provider has no dedicated transactions endpoint, attempt sync from card details.
+                try {
+                    $cardDetailsResponse = $this->mastercardApiClient->getMerchantMasterCard([
+                        'email' => $this->resolveProviderAccountEmail($user, $card),
+                        'cardid' => $card->provider_card_id,
+                    ]);
+                    $this->syncProviderTransactions($userId, $cardId, $cardDetailsResponse);
+                } catch (MastercardApiException) {
+                    // return local cache
+                }
             }
         }
 
@@ -951,11 +936,14 @@ class VirtualCardService
         $candidates = [
             data_get($response, 'data.transactions'),
             data_get($response, 'data.transaction'),
+            data_get($response, 'data.card_transactions'),
+            data_get($response, 'data.cardTransactions'),
+            data_get($response, 'data.history'),
+            data_get($response, 'data.statement'),
             data_get($response, 'data.items'),
             data_get($response, 'transactions'),
             data_get($response, 'transaction'),
             data_get($response, 'items'),
-            data_get($response, 'data'),
         ];
 
         foreach ($candidates as $candidate) {
@@ -965,13 +953,74 @@ class VirtualCardService
 
             $isAssoc = array_keys($candidate) !== range(0, count($candidate) - 1);
             if ($isAssoc) {
-                return [$candidate];
+                if ($this->isLikelyTransactionObject($candidate)) {
+                    return [$candidate];
+                }
+
+                continue;
             }
 
             return array_values(array_filter($candidate, 'is_array'));
         }
 
         return [];
+    }
+
+    /**
+     * @param array<string, mixed> $tx
+     */
+    protected function isLikelyTransactionObject(array $tx): bool
+    {
+        $keys = [
+            'id',
+            'transaction_id',
+            'reference',
+            'txid',
+            'amount',
+            'transaction_amount',
+            'debit_amount',
+            'status',
+            'transaction_status',
+        ];
+
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $tx)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function syncProviderTransactions(int $userId, int $cardId, array $providerResponse): void
+    {
+        $providerTransactions = $this->extractProviderTransactionsFromResponse($providerResponse);
+        foreach ($providerTransactions as $providerTransaction) {
+            if (! is_array($providerTransaction)) {
+                continue;
+            }
+
+            $normalized = $this->normalizeProviderTransaction($providerTransaction);
+            VirtualCardTransaction::updateOrCreate(
+                [
+                    'virtual_card_id' => $cardId,
+                    'provider_transaction_id' => $normalized['provider_transaction_id'],
+                ],
+                [
+                    'user_id' => $userId,
+                    'type' => $normalized['type'],
+                    'status' => $normalized['status'],
+                    'currency' => $normalized['currency'],
+                    'amount' => $normalized['amount'],
+                    'fee' => $normalized['fee'],
+                    'total_amount' => $normalized['total_amount'],
+                    'reference' => $normalized['reference'],
+                    'description' => $normalized['description'],
+                    'metadata' => $normalized['metadata'],
+                    'provider_payload' => $providerTransaction,
+                ]
+            );
+        }
     }
 
     /**
