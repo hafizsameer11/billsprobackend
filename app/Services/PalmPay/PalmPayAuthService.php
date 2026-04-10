@@ -75,8 +75,8 @@ class PalmPayAuthService
 
         $md5Upper = strtoupper(md5($this->buildSignString($withoutSign)));
 
-        $publicKey = $this->normalizedPublicKey();
-        if ($publicKey === '') {
+        $publicKey = $this->resolvedPublicKey();
+        if ($publicKey === null) {
             return false;
         }
 
@@ -159,12 +159,49 @@ class PalmPayAuthService
         return $res;
     }
 
-    private function normalizedPublicKey(): string
+    /**
+     * @return resource|\OpenSSLAsymmetricKey|null
+     */
+    private function resolvedPublicKey()
     {
         $key = (string) Config::get('palmpay.public_key', '');
-        $key = str_replace('\\n', "\n", $key);
+        $key = trim(str_replace('\\n', "\n", $key));
+        $key = trim($key, "\"'");
+        if ($key === '') {
+            return null;
+        }
 
-        return trim($key);
+        // 1) PEM directly
+        if (str_contains($key, 'BEGIN')) {
+            $res = openssl_pkey_get_public($key);
+            if ($res !== false) {
+                return $res;
+            }
+        }
+
+        // 2) Base64 body / DER -> PEM
+        $keyNoWs = preg_replace('/\s+/', '', $key) ?? '';
+        $der = base64_decode($keyNoWs, true);
+        if ($der !== false && $der !== '') {
+            $pem = "-----BEGIN PUBLIC KEY-----\n".
+                chunk_split(base64_encode($der), 64, "\n").
+                "-----END PUBLIC KEY-----\n";
+            $res = openssl_pkey_get_public($pem);
+            if ($res !== false) {
+                return $res;
+            }
+        }
+
+        // 3) Raw body wrapped as PEM
+        $pemFromBody = "-----BEGIN PUBLIC KEY-----\n".
+            chunk_split($keyNoWs, 64, "\n").
+            "-----END PUBLIC KEY-----\n";
+        $res = openssl_pkey_get_public($pemFromBody);
+        if ($res === false) {
+            return null;
+        }
+
+        return $res;
     }
 
     public function resolvedBaseUrl(): string

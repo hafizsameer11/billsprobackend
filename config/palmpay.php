@@ -18,6 +18,9 @@ return [
     'frontend_url' => env('FRONTEND_URL', config('app.url')),
 
     'verify_webhook_signature' => env('PALMPAY_VERIFY_WEBHOOK_SIGNATURE', true),
+    // When true, drop webhooks where payload appId != PALMPAY_APP_ID.
+    // Keep false unless PalmPay explicitly guarantees appId consistency for your account.
+    'strict_webhook_app_id' => env('PALMPAY_STRICT_WEBHOOK_APP_ID', false),
 
     'timeout' => (int) env('PALMPAY_HTTP_TIMEOUT', 30),
 

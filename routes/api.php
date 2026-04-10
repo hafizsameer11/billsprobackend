@@ -66,6 +66,8 @@ Route::prefix('auth')->group(function () {
 // ============================================================================
 Route::post('/webhooks/palmpay', [PalmPayWebhookController::class, 'handle']);
 Route::post('/webhooks/palmpay/bill-payment', [PalmPayWebhookController::class, 'handle']);
+Route::post('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
+Route::get('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::post('/webhooks/tatum', [TatumWebhookController::class, 'handle']);
 
 // ============================================================================

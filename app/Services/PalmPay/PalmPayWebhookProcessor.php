@@ -47,12 +47,18 @@ class PalmPayWebhookProcessor
         }
 
         $expectedAppId = (string) Config::get('palmpay.app_id', '');
-        if ($expectedAppId !== '' && isset($payload['appId']) && (string) $payload['appId'] !== $expectedAppId) {
+        $payloadAppId = isset($payload['appId']) ? (string) $payload['appId'] : null;
+        $strictAppId = (bool) Config::get('palmpay.strict_webhook_app_id', false);
+        if ($expectedAppId !== '' && $payloadAppId !== null && $payloadAppId !== $expectedAppId) {
             Log::warning('PalmPay deposit webhook ignored: appId mismatch', [
                 'orderId' => $orderId,
+                'expectedAppId' => $expectedAppId,
+                'payloadAppId' => $payloadAppId,
             ]);
 
-            return;
+            if ($strictAppId) {
+                return;
+            }
         }
 
         $palm = PalmPayDepositOrder::where('merchant_order_id', $orderId)->first();

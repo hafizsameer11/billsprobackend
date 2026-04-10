@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
+use App\Models\Deposit;
 use App\Models\VirtualCardTransaction;
 use App\Services\Transaction\TransactionService;
 use Illuminate\Http\Request;
@@ -286,7 +287,56 @@ class TransactionController extends Controller
                 return $this->formatTransaction($transaction);
             });
 
-            return ResponseHelper::success($formattedTransactions, 'Deposit transactions retrieved successfully.');
+            // Include initiated deposits that are not yet represented in transactions table
+            // (e.g. PalmPay virtual account deposits before webhook success).
+            $pendingDeposits = Deposit::query()
+                ->where('user_id', $request->user()->id)
+                ->where('currency', 'NGN')
+                ->whereNull('transaction_id')
+                ->when($request->filled('status'), function ($query) use ($request) {
+                    $query->where('status', (string) $request->query('status'));
+                }, function ($query) {
+                    $query->whereIn('status', ['pending', 'failed', 'cancelled']);
+                })
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(function (Deposit $deposit) {
+                    $metadata = array_merge($deposit->metadata ?? [], [
+                        'payment_method' => $deposit->payment_method,
+                        'deposit_reference' => $deposit->deposit_reference,
+                        'source' => 'deposits_table_pending',
+                    ]);
+
+                    return [
+                        'id' => 'deposit_'.$deposit->id,
+                        'transaction_id' => $deposit->deposit_reference,
+                        'type' => 'deposit',
+                        'category' => 'fiat_deposit',
+                        'status' => $deposit->status,
+                        'currency' => $deposit->currency,
+                        'amount' => (float) $deposit->amount,
+                        'fee' => (float) $deposit->fee,
+                        'total_amount' => (float) $deposit->total_amount,
+                        'reference' => $deposit->deposit_reference,
+                        'description' => 'Deposit initiated',
+                        'bank_name' => null,
+                        'account_number' => null,
+                        'account_name' => null,
+                        'metadata' => $metadata,
+                        'created_at' => $deposit->created_at?->toISOString(),
+                        'updated_at' => $deposit->updated_at?->toISOString(),
+                        'completed_at' => $deposit->completed_at?->toISOString(),
+                    ];
+                });
+
+            $merged = collect($formattedTransactions)
+                ->merge($pendingDeposits)
+                ->sortByDesc('created_at')
+                ->take($limit)
+                ->values();
+
+            return ResponseHelper::success($merged, 'Deposit transactions retrieved successfully.');
         } catch (\Exception $e) {
             Log::error('Get deposit transactions error: ' . $e->getMessage(), [
                 'user_id' => $request->user()->id,
