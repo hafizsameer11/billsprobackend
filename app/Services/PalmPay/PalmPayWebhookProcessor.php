@@ -5,6 +5,8 @@ namespace App\Services\PalmPay;
 use App\Models\PalmPayBillOrder;
 use App\Models\PalmPayDepositOrder;
 use App\Services\Withdrawal\WithdrawalService;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Log;
 
 class PalmPayWebhookProcessor
 {
@@ -41,6 +43,15 @@ class PalmPayWebhookProcessor
         $orderId = (string) ($payload['orderId'] ?? '');
         $orderStatus = isset($payload['orderStatus']) ? (int) $payload['orderStatus'] : null;
         if ($orderId === '' || $orderStatus === null) {
+            return;
+        }
+
+        $expectedAppId = (string) Config::get('palmpay.app_id', '');
+        if ($expectedAppId !== '' && isset($payload['appId']) && (string) $payload['appId'] !== $expectedAppId) {
+            Log::warning('PalmPay deposit webhook ignored: appId mismatch', [
+                'orderId' => $orderId,
+            ]);
+
             return;
         }
 

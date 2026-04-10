@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Deposit\ConfirmDepositRequest;
 use App\Http\Requests\Deposit\InitiateDepositRequest;
 use App\Services\Deposit\DepositService;
+use App\Services\PalmPay\PalmPayDepositService;
 use App\Support\PalmPayConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,12 +16,10 @@ use OpenApi\Attributes as OA;
 
 class DepositController extends Controller
 {
-    protected DepositService $depositService;
-
-    public function __construct(DepositService $depositService)
-    {
-        $this->depositService = $depositService;
-    }
+    public function __construct(
+        protected DepositService $depositService,
+        protected PalmPayDepositService $palmPayDepositService
+    ) {}
 
     /**
      * Get deposit bank account details

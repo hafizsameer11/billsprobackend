@@ -6,6 +6,7 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
 use App\Http\Requests\VirtualCard\FundCardRequest;
+use App\Http\Requests\VirtualCard\FundingEstimateRequest;
 use App\Http\Requests\VirtualCard\UpdateCardLimitsRequest;
 use App\Http\Requests\VirtualCard\WithdrawCardRequest;
 use App\Services\VirtualCard\VirtualCardService;
@@ -16,7 +17,7 @@ use OpenApi\Attributes as OA;
 
 #[OA\Tag(
     name: 'Virtual Cards',
-    description: 'Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using `VIRTUAL_CARD_*` fees, then calls the provider with `firstname`, `lastname`, `email`. **Fund / block / unblock / 3DS / wallet OTP** use provider `cardid` + `email`. Configure `MASTERCARD_API_*` env keys. Responses may include `provider_payload` and `fee_charged` on create.'
+    description: 'Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using `VIRTUAL_CARD_*` fees, then calls the provider with `firstname`, `lastname`, `email`. **Fund** loads the card at the provider for the USD `amount`, then debits the user\'s Naira or Crypto wallet per `VIRTUAL_CARD_*` fund settings (`GET /virtual-cards/funding-estimate` for quotes). Configure `MASTERCARD_API_*` env keys.'
 )]
 class VirtualCardController extends Controller
 {
@@ -46,6 +47,42 @@ class VirtualCardController extends Controller
             ]);
 
             return ResponseHelper::serverError('An error occurred while retrieving virtual cards. Please try again.');
+        }
+    }
+
+    /**
+     * Quote wallet debit for a card load (same rules as POST fund).
+     */
+    #[OA\Get(
+        path: '/api/virtual-cards/funding-estimate',
+        summary: 'Estimate card funding charge',
+        description: 'Returns `principal_usd`, optional load fee, processing NGN (Naira path), and `charge_ngn` or `charge_usd` using `VIRTUAL_CARD_*` config.',
+        security: [['sanctum' => []]],
+        tags: ['Virtual Cards'],
+    )]
+    #[OA\Parameter(name: 'amount', in: 'query', required: true, schema: new OA\Schema(type: 'number', example: 25))]
+    #[OA\Parameter(name: 'payment_wallet_type', in: 'query', required: true, schema: new OA\Schema(type: 'string', enum: ['naira_wallet', 'crypto_wallet']))]
+    #[OA\Parameter(name: 'payment_wallet_currency', in: 'query', required: false, schema: new OA\Schema(type: 'string', example: 'NGN'))]
+    #[OA\Response(response: 200, description: 'Estimate returned', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 422, description: 'Validation error')]
+    public function fundingEstimate(FundingEstimateRequest $request): JsonResponse
+    {
+        try {
+            $v = $request->validated();
+            $estimate = $this->virtualCardService->estimateCardFunding(
+                (float) $v['amount'],
+                (string) $v['payment_wallet_type'],
+                (string) ($v['payment_wallet_currency'] ?? 'NGN')
+            );
+
+            return ResponseHelper::success($estimate, 'Funding estimate retrieved successfully.');
+        } catch (\Exception $e) {
+            Log::error('Funding estimate error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while computing the funding estimate.');
         }
     }
 
@@ -172,22 +209,23 @@ class VirtualCardController extends Controller
     /**
      * Fund virtual card
      */
-    #[OA\Post(path: '/api/virtual-cards/{id}/fund', summary: 'Fund virtual card', description: 'Calls provider `fundcard` with `cardid`, `email`, `amount` (funding wallet / fees per provider). Optional `email` or `useremail` overrides the authenticated user email.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Post(path: '/api/virtual-cards/{id}/fund', summary: 'Fund virtual card', description: 'Calls provider `fundcard` for `amount` (USD on card), then debits `naira_wallet` or `crypto_wallet` per `VIRTUAL_CARD_*` fund config. Use `GET /virtual-cards/funding-estimate` to preview charges.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Local virtual card id', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(
         required: true,
         content: new OA\JsonContent(
-            required: ['amount'],
+            required: ['amount', 'payment_wallet_type'],
             properties: [
-                new OA\Property(property: 'amount', description: 'Fund amount (provider rules apply)', type: 'number', format: 'float', example: 50.0),
+                new OA\Property(property: 'amount', description: 'USD amount to load onto the card', type: 'number', format: 'float', example: 50.0),
+                new OA\Property(property: 'payment_wallet_type', type: 'string', enum: ['naira_wallet', 'crypto_wallet'], example: 'naira_wallet'),
                 new OA\Property(property: 'email', description: 'Email sent to provider', type: 'string', format: 'email', nullable: true),
                 new OA\Property(property: 'useremail', description: 'Alias of email for provider', type: 'string', format: 'email', nullable: true),
-                new OA\Property(property: 'payment_wallet_type', description: 'Optional label for client tracking', type: 'string', nullable: true, enum: ['naira_wallet', 'crypto_wallet', 'provider_balance']),
-                new OA\Property(property: 'payment_wallet_currency', type: 'string', nullable: true, example: 'USD'),
+                new OA\Property(property: 'payment_wallet_currency', description: 'Fiat wallet currency when using naira_wallet', type: 'string', nullable: true, example: 'NGN'),
             ],
             example: [
                 'amount' => 50.0,
-                'useremail' => 'user@billspro.hmstech.org',
+                'payment_wallet_type' => 'naira_wallet',
+                'payment_wallet_currency' => 'NGN',
             ],
         ),
     )]

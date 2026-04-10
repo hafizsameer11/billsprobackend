@@ -115,7 +115,8 @@ class PalmPayDepositService
     }
 
     /**
-     * Poll PalmPay for latest status (does not credit wallet; webhook is authoritative).
+     * Poll PalmPay for latest status. When the platform reports a terminal state, applies the same
+     * wallet credit / failure handling as the webhook (idempotent if already completed).
      *
      * @return array<string, mixed>
      */
@@ -123,10 +124,49 @@ class PalmPayDepositService
     {
         $remote = $this->checkout->queryOrderStatus($order->merchant_order_id, $order->palmpay_order_no);
 
+        $orderStatus = (int) ($remote['orderStatus'] ?? $order->order_status);
+
         $order->update([
             'palmpay_order_no' => $remote['orderNo'] ?? $order->palmpay_order_no,
-            'order_status' => (int) ($remote['orderStatus'] ?? $order->order_status),
+            'order_status' => $orderStatus,
         ]);
+
+        $deposit = $deposit->fresh();
+        if (! $deposit || $deposit->status !== 'pending') {
+            return $remote;
+        }
+
+        $order = $order->fresh();
+        if (! $order) {
+            return $remote;
+        }
+
+        if ($orderStatus === 2) {
+            $amountRaw = $remote['amount'] ?? $remote['orderAmount'] ?? null;
+            $amountCents = is_numeric($amountRaw)
+                ? (int) $amountRaw
+                : (int) round((float) $deposit->amount * 100);
+            $orderNo = (string) ($remote['orderNo'] ?? $order->palmpay_order_no ?? '');
+            $completed = $remote['completedTime'] ?? $remote['completeTime'] ?? null;
+            $completedMs = is_numeric($completed) ? (int) $completed : null;
+
+            $virtual = array_filter([
+                'bankName' => $remote['payerBankName'] ?? null,
+                'accountName' => $remote['payerAccountName'] ?? null,
+                'accountNumber' => $remote['payerVirtualAccNo'] ?? null,
+            ]);
+
+            $this->applyDepositSuccess(
+                $deposit,
+                $order,
+                $amountCents > 0 ? $amountCents : (int) round((float) $deposit->amount * 100),
+                $orderNo,
+                $completedMs,
+                $virtual
+            );
+        } elseif ($orderStatus === 3 || $orderStatus === 4) {
+            $this->markDepositFailed($deposit, $order, $orderStatus);
+        }
 
         return $remote;
     }
@@ -219,6 +259,10 @@ class PalmPayDepositService
 
     public function markDepositFailed(Deposit $deposit, PalmPayDepositOrder $order, int $orderStatus): void
     {
+        if ($deposit->status === 'completed') {
+            return;
+        }
+
         $status = $orderStatus === 3 ? 'failed' : 'cancelled';
 
         $deposit->update([

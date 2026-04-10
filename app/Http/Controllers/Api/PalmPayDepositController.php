@@ -76,10 +76,12 @@ class PalmPayDepositController extends Controller
 
         try {
             $remote = $this->palmPayDepositService->refreshRemoteStatus($deposit, $order);
+            $deposit = $deposit->fresh();
 
             return ResponseHelper::success([
-                'status' => $deposit->fresh()->status,
+                'status' => $deposit->status,
                 'depositReference' => $deposit->deposit_reference,
+                'transactionId' => $deposit->transaction_id,
                 'palmpay' => [
                     'orderStatus' => $remote['orderStatus'] ?? null,
                     'orderNo' => $remote['orderNo'] ?? null,

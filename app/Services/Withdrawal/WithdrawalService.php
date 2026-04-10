@@ -185,6 +185,184 @@ class WithdrawalService
     }
 
     /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function getPalmPayBanks(int $businessType = 0): array
+    {
+        return $this->palmPayPayout->queryBankList($businessType);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function verifyPalmPayAccount(string $bankCode, string $accountNumber): array
+    {
+        return $this->palmPayPayout->verifyAccount($bankCode, $accountNumber);
+    }
+
+    public function processPalmPayWithdrawalDirect(
+        int $userId,
+        float $amount,
+        string $pin,
+        string $bankCode,
+        string $accountNumber,
+        string $accountName,
+        ?string $phoneNumber = null
+    ): array {
+        if (! PalmPayConfig::usePalmPayForWithdrawal()) {
+            throw new \RuntimeException('PalmPay withdrawals are disabled.');
+        }
+
+        $user = User::findOrFail($userId);
+        if (! $user->pin || ! Hash::check($pin, $user->pin)) {
+            throw new \Exception('Invalid PIN');
+        }
+        if ($amount <= 0) {
+            throw new \Exception('Invalid withdrawal amount');
+        }
+
+        $normalizedAccount = preg_replace('/\D/', '', $accountNumber) ?? '';
+        if ($normalizedAccount === '') {
+            throw new \Exception('Invalid account number');
+        }
+        if (trim($bankCode) === '') {
+            throw new \Exception('Bank code is required');
+        }
+        if (trim($accountName) === '') {
+            throw new \Exception('Account name is required');
+        }
+
+        $fee = $this->withdrawalFee;
+        $totalAmount = $amount + $fee;
+
+        $webhookBase = rtrim((string) Config::get('palmpay.webhook_url'), '/');
+        if ($webhookBase === '') {
+            throw new \RuntimeException('PALMPAY_WEBHOOK_URL is not configured.');
+        }
+
+        $transactionId = Transaction::generateTransactionId();
+        $reference = 'WDR'.time().strtoupper(substr($transactionId, 0, 8));
+        $palmMerchantOrderId = 'payout_'.substr(bin2hex(random_bytes(12)), 0, 24);
+
+        $transaction = Transaction::create([
+            'user_id' => $userId,
+            'transaction_id' => $transactionId,
+            'type' => 'withdrawal',
+            'category' => 'fiat_withdrawal',
+            'status' => 'pending',
+            'currency' => 'NGN',
+            'amount' => $amount,
+            'fee' => $fee,
+            'total_amount' => $totalAmount,
+            'reference' => $reference,
+            'description' => "Withdrawal to {$bankCode} - {$normalizedAccount}",
+            'bank_name' => $bankCode,
+            'account_number' => $normalizedAccount,
+            'account_name' => trim($accountName),
+            'metadata' => [
+                'withdrawal_type' => 'palmpay_payout',
+                'provider' => 'palmpay',
+                'palmpay_merchant_order_id' => $palmMerchantOrderId,
+                'palmpay_bank_code' => trim($bankCode),
+            ],
+        ]);
+
+        $amountCents = (int) round($amount * 100);
+        $payeePhone = $this->formatPayeePhone($phoneNumber ?: $user->phone_number);
+
+        try {
+            $resp = $this->palmPayPayout->initiatePayout([
+                'orderId' => $palmMerchantOrderId,
+                'title' => 'Withdrawal',
+                'description' => "Withdrawal to {$normalizedAccount}",
+                'payeeName' => trim($accountName),
+                'payeeBankCode' => trim($bankCode),
+                'payeeBankAccNo' => $normalizedAccount,
+                'payeePhoneNo' => $payeePhone,
+                'currency' => 'NGN',
+                'amount' => $amountCents,
+                'notifyUrl' => $webhookBase,
+                'remark' => 'Withdrawal user '.$userId.' tx '.$transactionId,
+            ]);
+        } catch (\Throwable $e) {
+            $transaction->update([
+                'status' => 'failed',
+                'metadata' => array_merge($transaction->metadata ?? [], [
+                    'error' => $e->getMessage(),
+                ]),
+            ]);
+            throw $e;
+        }
+
+        $orderStatus = isset($resp['orderStatus']) ? (int) $resp['orderStatus'] : 0;
+        $orderNo = isset($resp['orderNo']) ? (string) $resp['orderNo'] : '';
+
+        if ($orderStatus === 3 || $orderStatus === 4) {
+            $transaction->update([
+                'status' => 'failed',
+                'metadata' => array_merge($transaction->metadata ?? [], [
+                    'palmpay_response' => $resp,
+                ]),
+            ]);
+
+            throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
+        }
+
+        return DB::transaction(function () use ($userId, $totalAmount, $transaction, $resp, $orderStatus, $orderNo, $bankCode, $normalizedAccount, $accountName, $amount, $fee) {
+            $fiatWallet = FiatWallet::where('user_id', $userId)
+                ->where('currency', 'NGN')
+                ->where('country_code', 'NG')
+                ->lockForUpdate()
+                ->first();
+
+            if (! $fiatWallet) {
+                throw new \Exception('Fiat wallet not found');
+            }
+
+            $availableBalance = (float) $fiatWallet->balance - (float) $fiatWallet->locked_balance;
+            if ($availableBalance < $totalAmount) {
+                throw new \Exception('Insufficient balance');
+            }
+
+            $fiatWallet->decrement('balance', $totalAmount);
+
+            $meta = array_merge($transaction->metadata ?? [], [
+                'palmpay_order_no' => $orderNo,
+                'palmpay_order_status' => $orderStatus,
+                'palmpay_response' => $resp,
+                'wallet_debited' => true,
+                'palmpay_session_id' => $resp['sessionId'] ?? null,
+            ]);
+
+            $transaction->update([
+                'status' => $orderStatus === 2 ? 'completed' : 'pending',
+                'completed_at' => $orderStatus === 2 ? now() : null,
+                'metadata' => $meta,
+            ]);
+
+            return [
+                'transaction' => $transaction->fresh(),
+                'bank_account' => [
+                    'bank_name' => $bankCode,
+                    'bank_code' => $bankCode,
+                    'account_number' => $normalizedAccount,
+                    'account_name' => trim($accountName),
+                ],
+                'amount' => $amount,
+                'fee' => $fee,
+                'total_amount' => $totalAmount,
+                'payout_status' => $orderStatus === 2 ? 'completed' : 'pending',
+                'provider' => 'palmpay',
+                'palmpay' => [
+                    'orderNo' => $orderNo,
+                    'orderStatus' => $orderStatus,
+                    'sessionId' => $resp['sessionId'] ?? null,
+                ],
+            ];
+        });
+    }
+
+    /**
      * Legacy: instant ledger debit only (no outbound bank API).
      */
     private function processLegacyInternalWithdrawal(

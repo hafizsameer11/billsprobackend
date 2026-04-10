@@ -211,6 +211,97 @@ class WithdrawalController extends Controller
     }
 
     /**
+     * PalmPay payout bank list for withdrawal flow.
+     */
+    public function getPalmPayBanks(Request $request): JsonResponse
+    {
+        try {
+            $businessType = (int) $request->query('businessType', 0);
+            $banks = $this->withdrawalService->getPalmPayBanks($businessType);
+
+            return ResponseHelper::success($banks, 'PalmPay bank list retrieved successfully.');
+        } catch (\Throwable $e) {
+            Log::error('PalmPay bank list error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+            ]);
+
+            return ResponseHelper::error($e->getMessage(), 400);
+        }
+    }
+
+    /**
+     * Verify beneficiary account before initiating PalmPay payout.
+     */
+    public function verifyPalmPayAccount(Request $request): JsonResponse
+    {
+        $request->validate([
+            'bankCode' => ['required', 'string', 'max:20'],
+            'accountNumber' => ['required', 'string', 'min:6', 'max:30'],
+        ]);
+
+        try {
+            $result = $this->withdrawalService->verifyPalmPayAccount(
+                (string) $request->input('bankCode'),
+                (string) $request->input('accountNumber')
+            );
+
+            return ResponseHelper::success($result, 'Account verified successfully.');
+        } catch (\Throwable $e) {
+            Log::warning('PalmPay account verify failed: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+            ]);
+
+            return ResponseHelper::error($e->getMessage(), 400);
+        }
+    }
+
+    /**
+     * Direct PalmPay payout initiate using bankCode + account details.
+     */
+    public function initiatePalmPayWithdrawal(Request $request): JsonResponse
+    {
+        $request->validate([
+            'amount' => ['required', 'numeric', 'min:1'],
+            'currency' => ['sometimes', 'string', 'max:10'],
+            'bankCode' => ['required', 'string', 'max:20'],
+            'accountNumber' => ['required', 'string', 'min:6', 'max:30'],
+            'accountName' => ['required', 'string', 'max:120'],
+            'phoneNumber' => ['nullable', 'string', 'max:20'],
+            'pin' => ['required', 'string', 'size:4', 'regex:/^[0-9]{4}$/'],
+        ]);
+
+        $currency = strtoupper((string) $request->input('currency', 'NGN'));
+        if ($currency !== 'NGN') {
+            return ResponseHelper::error('Only NGN withdrawal is currently supported.', 400);
+        }
+
+        try {
+            $result = $this->withdrawalService->processPalmPayWithdrawalDirect(
+                $request->user()->id,
+                (float) $request->input('amount'),
+                (string) $request->input('pin'),
+                (string) $request->input('bankCode'),
+                (string) $request->input('accountNumber'),
+                (string) $request->input('accountName'),
+                $request->input('phoneNumber')
+            );
+
+            $payoutStatus = $result['payout_status'] ?? 'completed';
+            $message = $payoutStatus === 'pending'
+                ? 'Withdrawal submitted; funds are being sent to your bank.'
+                : 'You have successfully completed a withdrawal of N'.number_format((float) $result['amount'], 2).'.';
+
+            return ResponseHelper::success($result, $message);
+        } catch (\Throwable $e) {
+            Log::error('PalmPay direct withdrawal error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+            ]);
+
+            return ResponseHelper::error($e->getMessage(), 400);
+        }
+    }
+
+    /**
      * Process withdrawal
      */
     #[OA\Post(path: '/api/withdrawal', summary: 'Process withdrawal', description: 'When PalmPay is configured (PALMPAY_APP_ID, PALMPAY_PRIVATE_KEY, PALMPAY_WEBHOOK_URL), debits the wallet and calls PalmPay merchant payout to the saved bank account. The bank account must include bank_code (PalmPay bank code). Set PALMPAY_LEGACY_INTERNAL_WITHDRAWAL=true for the old ledger-only behaviour.', security: [['sanctum' => []]], tags: ['Withdrawal'])]

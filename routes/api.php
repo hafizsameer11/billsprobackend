@@ -133,6 +133,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
 
         // Withdrawal operations
         Route::get('/fee', [WithdrawalController::class, 'getWithdrawalFee']);
+        Route::get('/palmpay/banks', [WithdrawalController::class, 'getPalmPayBanks']);
+        Route::post('/palmpay/verify-account', [WithdrawalController::class, 'verifyPalmPayAccount']);
+        Route::post('/palmpay/initiate', [WithdrawalController::class, 'initiatePalmPayWithdrawal']);
         Route::post('/', [WithdrawalController::class, 'withdraw']);
 
         // Transaction history (kept for backward compatibility, but use /transactions/withdrawals instead)
@@ -306,6 +309,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // ========================================================================
     Route::prefix('virtual-cards')->group(function () {
         Route::get('/', [VirtualCardController::class, 'index']);
+        Route::get('/funding-estimate', [VirtualCardController::class, 'fundingEstimate']);
         Route::post('/', [VirtualCardController::class, 'create']);
         Route::get('/{id}', [VirtualCardController::class, 'show']);
         Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);

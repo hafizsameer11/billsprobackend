@@ -10,6 +10,7 @@ use App\Models\VirtualCardTransaction;
 use App\Services\Crypto\CryptoWalletService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class VirtualCardService
 {
@@ -230,10 +231,72 @@ class VirtualCardService
     }
 
     /**
-     * Fund provider-backed virtual Mastercard.
+     * Quote what will be debited from Naira or Crypto for a given card load (USD principal).
+     *
+     * @return array<string, mixed>
+     */
+    public function estimateCardFunding(float $principalUsd, string $paymentWalletType, string $fiatCurrency = 'NGN'): array
+    {
+        return $this->computeFundWalletCharges($principalUsd, $paymentWalletType, $fiatCurrency);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function computeFundWalletCharges(float $principalUsd, string $paymentWalletType, string $fiatCurrency): array
+    {
+        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $processingNgn = (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
+        $includeLoad = (bool) config('virtual_card.fund_include_provider_load_fee', false);
+        $flat = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
+        $pct = (float) config('virtual_card.fund_load_percent', 1.0);
+
+        $loadFeeUsd = 0.0;
+        if ($includeLoad) {
+            $loadFeeUsd = $flat + ($principalUsd * max($pct, 0.0) / 100.0);
+        }
+
+        $totalUsd = round($principalUsd + $loadFeeUsd, 8);
+
+        $out = [
+            'principal_usd' => round($principalUsd, 8),
+            'load_fee_usd' => round($loadFeeUsd, 8),
+            'total_usd' => $totalUsd,
+            'processing_fee_ngn' => $paymentWalletType === 'naira_wallet' ? round($processingNgn, 2) : 0.0,
+            'exchange_rate_ngn_per_usd' => $rate,
+            'payment_wallet_type' => $paymentWalletType,
+            'fund_include_provider_load_fee' => $includeLoad,
+        ];
+
+        if ($paymentWalletType === 'naira_wallet') {
+            $out['charge_ngn'] = round($totalUsd * $rate + $processingNgn, 2);
+            $out['charge_usd'] = $totalUsd;
+            $out['currency'] = $fiatCurrency;
+        } else {
+            $out['charge_usd'] = $totalUsd;
+            $out['currency'] = 'USD';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Fund virtual Mastercard: call provider for USD principal, then debit user's Naira or Crypto wallet.
      */
     public function fundCard(int $userId, int $cardId, array $data): array
     {
+        $paymentWalletType = (string) ($data['payment_wallet_type'] ?? '');
+        if (! in_array($paymentWalletType, ['naira_wallet', 'crypto_wallet'], true)) {
+            return [
+                'success' => false,
+                'message' => 'Select naira_wallet or crypto_wallet to pay for this card load.',
+                'status' => 422,
+            ];
+        }
+
+        $fiatCurrency = (string) ($data['payment_wallet_currency'] ?? 'NGN');
+        $principalUsd = (float) $data['amount'];
+
         $card = VirtualCard::where('id', $cardId)
             ->where('user_id', $userId)
             ->firstOrFail();
@@ -242,14 +305,38 @@ class VirtualCardService
             return [
                 'success' => false,
                 'message' => 'This card is missing provider metadata and cannot be funded.',
+                'status' => 400,
             ];
         }
 
         $user = User::findOrFail($userId);
+        $charges = $this->computeFundWalletCharges($principalUsd, $paymentWalletType, $fiatCurrency);
+
+        if ($paymentWalletType === 'naira_wallet') {
+            $wallet = $this->walletService->getFiatWallet($userId, $fiatCurrency, 'NG');
+            $need = (float) ($charges['charge_ngn'] ?? 0);
+            if (! $wallet || (float) $wallet->balance + 0.0000001 < $need) {
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient Naira wallet balance for this card funding amount (including fees).',
+                    'status' => 400,
+                ];
+            }
+        } else {
+            $needUsd = (float) ($charges['charge_usd'] ?? 0);
+            if ($this->cryptoWalletService->getTotalCryptoBalanceInUsd($userId) + 0.0000001 < $needUsd) {
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient crypto wallet balance for this card funding amount (including fees).',
+                    'status' => 400,
+                ];
+            }
+        }
+
         $payload = [
             'email' => $this->providerAccountEmail($user, $data),
             'cardid' => $card->provider_card_id,
-            'amount' => (float) $data['amount'],
+            'amount' => $principalUsd,
         ];
 
         try {
@@ -269,68 +356,122 @@ class VirtualCardService
             ];
         }
 
-        return DB::transaction(function () use ($userId, $card, $data, $payload, $response) {
-            $freshCard = VirtualCard::where('id', $card->id)
-                ->where('user_id', $userId)
-                ->lockForUpdate()
-                ->firstOrFail();
+        try {
+            return DB::transaction(function () use ($userId, $card, $data, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
+                if ($paymentWalletType === 'naira_wallet') {
+                    $wallet = FiatWallet::where('user_id', $userId)
+                        ->where('currency', $fiatCurrency)
+                        ->where('country_code', 'NG')
+                        ->lockForUpdate()
+                        ->first();
+                    $chargeNgn = (float) ($charges['charge_ngn'] ?? 0);
+                    if (! $wallet || (float) $wallet->balance + 0.0000001 < $chargeNgn) {
+                        throw new \RuntimeException('Insufficient Naira wallet balance.');
+                    }
+                    $wallet->decrement('balance', $chargeNgn);
+                } else {
+                    $chargeUsd = (float) ($charges['charge_usd'] ?? 0);
+                    $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $chargeUsd);
+                    if (! $deduct['success']) {
+                        throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct from crypto wallet.');
+                    }
+                }
 
-            $freshCard->update([
-                'provider_status' => $this->extractStatus($response, $freshCard->provider_status),
-                'provider_payload' => $response,
-                'balance' => $this->extractBalance($response, (float) $freshCard->balance + (float) $data['amount']),
-            ]);
+                $freshCard = VirtualCard::where('id', $card->id)
+                    ->where('user_id', $userId)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            $transaction = Transaction::create([
-                'user_id' => $userId,
-                'transaction_id' => Transaction::generateTransactionId(),
-                'type' => 'card_funding',
-                'category' => 'virtual_card',
-                'status' => 'completed',
-                'currency' => 'USD',
-                'amount' => (float) $data['amount'],
-                'fee' => 0,
-                'total_amount' => (float) $data['amount'],
-                'reference' => 'FUND'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
-                'description' => "Fund virtual Mastercard with {$data['amount']} USD",
-                'metadata' => [
-                    'card_id' => $freshCard->id,
-                    'provider_card_id' => $freshCard->provider_card_id,
+                $freshCard->update([
+                    'provider_status' => $this->extractStatus($response, $freshCard->provider_status),
                     'provider_payload' => $response,
-                ],
-            ]);
+                    'balance' => $this->extractBalance($response, (float) $freshCard->balance + $principalUsd),
+                ]);
 
-            VirtualCardTransaction::create([
-                'virtual_card_id' => $freshCard->id,
+                $txCurrency = $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD';
+                $txAmount = $paymentWalletType === 'naira_wallet'
+                    ? (float) ($charges['charge_ngn'] ?? 0)
+                    : (float) ($charges['charge_usd'] ?? 0);
+
+                $processingNgn = (float) ($charges['processing_fee_ngn'] ?? 0);
+                $rate = (float) ($charges['exchange_rate_ngn_per_usd'] ?? 1);
+                $feeUsdReporting = (float) ($charges['load_fee_usd'] ?? 0);
+                if ($paymentWalletType === 'naira_wallet' && $processingNgn > 0) {
+                    $feeUsdReporting += $processingNgn / max($rate, 0.0001);
+                }
+
+                $transaction = Transaction::create([
+                    'user_id' => $userId,
+                    'transaction_id' => Transaction::generateTransactionId(),
+                    'type' => 'card_funding',
+                    'category' => 'virtual_card',
+                    'status' => 'completed',
+                    'currency' => $txCurrency,
+                    'amount' => $txAmount,
+                    'fee' => 0,
+                    'total_amount' => $txAmount,
+                    'reference' => 'FUND'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                    'description' => 'Virtual card load: $'.number_format($principalUsd, 2).' USD from '
+                        .($paymentWalletType === 'naira_wallet' ? 'Naira' : 'Crypto').' wallet',
+                    'metadata' => [
+                        'card_id' => $freshCard->id,
+                        'provider_card_id' => $freshCard->provider_card_id,
+                        'principal_usd' => $principalUsd,
+                        'wallet_charge' => $charges,
+                        'payment_wallet_type' => $paymentWalletType,
+                        'provider_payload' => $response,
+                    ],
+                ]);
+
+                VirtualCardTransaction::create([
+                    'virtual_card_id' => $freshCard->id,
+                    'user_id' => $userId,
+                    'transaction_id' => $transaction->id,
+                    'provider_transaction_id' => (string) ($this->extractProviderReference($response) ?? ''),
+                    'type' => 'fund',
+                    'status' => 'completed',
+                    'currency' => 'USD',
+                    'amount' => $principalUsd,
+                    'fee' => round($feeUsdReporting, 8),
+                    'total_amount' => $principalUsd,
+                    'payment_wallet_type' => $paymentWalletType,
+                    'payment_wallet_currency' => $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD',
+                    'exchange_rate' => $paymentWalletType === 'naira_wallet' ? $rate : 1,
+                    'reference' => $transaction->reference,
+                    'description' => 'Card funded from app wallet',
+                    'metadata' => [
+                        'wallet_charge' => $charges,
+                    ],
+                    'provider_payload' => $response,
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => $response['message'] ?? 'Card funded successfully',
+                    'data' => [
+                        'card' => $freshCard->fresh(),
+                        'transaction' => $transaction,
+                        'amount_funded_usd' => $principalUsd,
+                        'wallet_charged' => $charges,
+                        'provider_response' => $response,
+                        'funding_payload' => $payload,
+                    ],
+                ];
+            });
+        } catch (\RuntimeException $e) {
+            Log::critical('Virtual card funded at provider but wallet bookkeeping failed', [
                 'user_id' => $userId,
-                'transaction_id' => $transaction->id,
-                'provider_transaction_id' => (string) ($this->extractProviderReference($response) ?? ''),
-                'type' => 'fund',
-                'status' => 'completed',
-                'currency' => 'USD',
-                'amount' => (float) $data['amount'],
-                'fee' => 0,
-                'total_amount' => (float) $data['amount'],
-                'payment_wallet_type' => $data['payment_wallet_type'] ?? 'provider_balance',
-                'payment_wallet_currency' => 'USD',
-                'exchange_rate' => 1,
-                'reference' => $transaction->reference,
-                'description' => 'Provider funding operation',
-                'provider_payload' => $response,
+                'card_id' => $card->id,
+                'principal_usd' => $principalUsd,
+                'error' => $e->getMessage(),
             ]);
 
             return [
-                'success' => true,
-                'message' => $response['message'] ?? 'Card funded successfully',
-                'data' => [
-                    'card' => $freshCard->fresh(),
-                    'transaction' => $transaction,
-                    'amount_funded_usd' => (float) $data['amount'],
-                    'provider_response' => $response,
-                    'funding_payload' => $payload,
-                ],
+                'success' => false,
+                'message' => 'The card issuer accepted the load, but updating your wallet failed. Please contact support immediately.',
+                'status' => 500,
             ];
-        });
+        }
     }
 
     /**

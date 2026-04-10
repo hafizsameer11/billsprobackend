@@ -49,6 +49,52 @@ class PalmPayPayoutService
     }
 
     /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function queryBankList(int $businessType = 0): array
+    {
+        $full = $this->withCoreFields([
+            'businessType' => $businessType,
+        ]);
+        $signature = $this->auth->signPayload($full);
+        $url = $this->auth->resolvedBaseUrl().'/api/v2/general/merchant/queryBankList';
+
+        $data = $this->postExpectData($url, $full, $signature);
+
+        return isset($data['bankList']) && is_array($data['bankList']) ? $data['bankList'] : (array_is_list($data) ? $data : []);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function verifyAccount(string $bankCode, string $accountNumber): array
+    {
+        $normalizedAccount = preg_replace('/\D/', '', $accountNumber) ?? '';
+        if ($normalizedAccount === '') {
+            throw new RuntimeException('Account number is required.');
+        }
+
+        if ($bankCode === '100033') {
+            $full = $this->withCoreFields([
+                'accountNo' => $normalizedAccount,
+            ]);
+            $signature = $this->auth->signPayload($full);
+            $url = $this->auth->resolvedBaseUrl().'/api/v2/payment/merchant/payout/queryAccount';
+
+            return $this->postExpectData($url, $full, $signature);
+        }
+
+        $full = $this->withCoreFields([
+            'bankCode' => $bankCode,
+            'accountNo' => $normalizedAccount,
+        ]);
+        $signature = $this->auth->signPayload($full);
+        $url = $this->auth->resolvedBaseUrl().'/api/v2/payment/merchant/payout/queryBankAccount';
+
+        return $this->postExpectData($url, $full, $signature);
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @return array<string, mixed>
      */

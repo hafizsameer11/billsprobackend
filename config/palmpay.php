@@ -6,7 +6,6 @@ return [
     'base_url' => env('PALMPAY_BASE_URL'),
 
     'app_id' => env('PALMPAY_APP_ID'),
-    'api_key' => env('PALMPAY_API_KEY'),
 
     'private_key' => env('PALMPAY_PRIVATE_KEY'),
     'public_key' => env('PALMPAY_PUBLIC_KEY'),

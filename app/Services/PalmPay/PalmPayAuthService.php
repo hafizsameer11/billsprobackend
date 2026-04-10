@@ -88,13 +88,16 @@ class PalmPayAuthService
 
     public function requestHeaders(string $signature): array
     {
-        $apiKey = Config::get('palmpay.api_key') ?: Config::get('palmpay.app_id');
+        $appId = (string) Config::get('palmpay.app_id', '');
+        if ($appId === '') {
+            throw new RuntimeException('PALMPAY_APP_ID is not configured.');
+        }
 
         return [
             'Accept' => 'application/json, text/plain, */*',
             'Content-Type' => 'application/json',
             'CountryCode' => Config::get('palmpay.country_code', 'NG'),
-            'Authorization' => 'Bearer '.$apiKey,
+            'Authorization' => 'Bearer '.$appId,
             'Signature' => $signature,
         ];
     }
