@@ -14,8 +14,10 @@ class CreateBeneficiaryRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'categoryCode' => 'required|string|exists:bill_payment_categories,code',
-            'providerId' => 'required|integer|exists:bill_payment_providers,id',
+            'categoryCode' => 'required|string|max:50',
+            'providerId' => 'nullable|integer',
+            'providerCode' => 'nullable|string|max:100',
+            'providerName' => 'nullable|string|max:255',
             'name' => 'nullable|string|max:255',
             'accountNumber' => 'required|string|max:255',
             'accountType' => 'nullable|string|in:prepaid,postpaid',

@@ -561,12 +561,48 @@ class BillPaymentService
      */
     public function createBeneficiary(int $userId, array $data): Beneficiary
     {
-        $category = BillPaymentCategory::where('code', $data['categoryCode'])
-            ->firstOrFail();
+        $categoryCode = strtolower((string) ($data['categoryCode'] ?? ''));
+        $category = BillPaymentCategory::where('code', $categoryCode)->first();
+        if (! $category && $categoryCode !== '') {
+            $category = BillPaymentCategory::create([
+                'code' => $categoryCode,
+                'name' => ucwords(str_replace('_', ' ', $categoryCode)),
+                'description' => null,
+                'is_active' => true,
+            ]);
+        }
+        if (! $category) {
+            throw new \Exception('Category not found');
+        }
 
-        $provider = BillPaymentProvider::where('id', $data['providerId'])
-            ->where('category_id', $category->id)
-            ->firstOrFail();
+        $provider = null;
+        if (! empty($data['providerId'])) {
+            $provider = BillPaymentProvider::where('id', (int) $data['providerId'])
+                ->where('category_id', $category->id)
+                ->first();
+        }
+
+        $providerCode = strtoupper((string) ($data['providerCode'] ?? ''));
+        if (! $provider && $providerCode !== '') {
+            $provider = BillPaymentProvider::where('code', $providerCode)
+                ->where('category_id', $category->id)
+                ->first();
+        }
+
+        if (! $provider && $providerCode !== '') {
+            $provider = BillPaymentProvider::create([
+                'category_id' => $category->id,
+                'code' => $providerCode,
+                'name' => $data['providerName'] ?? $providerCode,
+                'country_code' => 'NG',
+                'currency' => 'NGN',
+                'is_active' => true,
+            ]);
+        }
+
+        if (! $provider) {
+            throw new \Exception('Provider not found');
+        }
 
         // Check for duplicate
         $existing = Beneficiary::where('user_id', $userId)
