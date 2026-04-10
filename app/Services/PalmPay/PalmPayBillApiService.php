@@ -107,14 +107,21 @@ class PalmPayBillApiService
             throw new RuntimeException('Invalid PalmPay response.');
         }
 
-        if (($payload['respCode'] ?? null) === '00000000' && isset($payload['data'])) {
-            $data = $payload['data'];
+        $respCode = $payload['respCode'] ?? null;
+        $errMsg = $payload['respMsg'] ?? $payload['message'] ?? $payload['msg'] ?? 'PalmPay bill API error';
 
-            return is_array($data) ? $data : [];
+        if ($respCode !== null && $respCode !== '00000000') {
+            throw new RuntimeException(is_string($errMsg) ? $errMsg : 'PalmPay bill API error');
         }
 
-        if (($payload['respCode'] ?? null) !== null && ($payload['respCode'] ?? '') !== '00000000') {
-            throw new RuntimeException($payload['respMsg'] ?? 'PalmPay bill API error');
+        // Success: recharge-account query often returns respCode OK with no `data` key — still valid.
+        if ($respCode === '00000000') {
+            $data = $payload['data'] ?? [];
+            if (is_array($data)) {
+                return $data;
+            }
+
+            return $data !== null ? ['result' => $data] : [];
         }
 
         // Some environments return an array at root
@@ -122,7 +129,7 @@ class PalmPayBillApiService
             return $payload;
         }
 
-        throw new RuntimeException($payload['respMsg'] ?? 'Unexpected PalmPay bill API response');
+        throw new RuntimeException(is_string($errMsg) ? $errMsg : 'Unexpected PalmPay bill API response');
     }
 
     /**
