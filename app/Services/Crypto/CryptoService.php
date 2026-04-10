@@ -211,11 +211,14 @@ class CryptoService
      */
     public function getDepositAddress(int $userId, string $currency, string $blockchain): array
     {
-        $account = $this->findActiveVirtualAccount($userId, $currency, $blockchain);
+        $normalizedCurrency = strtoupper(trim($currency));
+        $normalizedBlockchain = DepositAddressService::normalizeBlockchain($blockchain);
+
+        $account = $this->findActiveVirtualAccount($userId, $normalizedCurrency, $normalizedBlockchain);
 
         if (! $account) {
             $this->cryptoWalletService->initializeUserCryptoWallets($userId);
-            $account = $this->findActiveVirtualAccount($userId, $currency, $blockchain);
+            $account = $this->findActiveVirtualAccount($userId, $normalizedCurrency, $normalizedBlockchain);
         }
 
         if (! $account) {
@@ -241,9 +244,9 @@ class CryptoService
         return [
             'success' => true,
             'data' => [
-                'currency' => $currency,
-                'blockchain' => $blockchain,
-                'network' => $blockchain,
+                'currency' => $normalizedCurrency,
+                'blockchain' => $normalizedBlockchain,
+                'network' => $normalizedBlockchain,
                 'deposit_address' => $depositAddress,
                 'qr_code' => $this->generateQrCode($depositAddress),
                 'account_id' => $account->id,
@@ -1026,9 +1029,12 @@ class CryptoService
 
     protected function findActiveVirtualAccount(int $userId, string $currency, string $blockchain): ?VirtualAccount
     {
+        $normalizedCurrency = strtoupper(trim($currency));
+        $normalizedBlockchain = DepositAddressService::normalizeBlockchain($blockchain);
+
         return VirtualAccount::where('user_id', $userId)
-            ->where('currency', $currency)
-            ->where('blockchain', $blockchain)
+            ->where('currency', $normalizedCurrency)
+            ->whereRaw('LOWER(blockchain) = ?', [strtolower($normalizedBlockchain)])
             ->where('active', true)
             ->with('walletCurrency')
             ->first();
