@@ -1,5 +1,6 @@
 <?php
 
+use App\Logging\DatabaseLogHandler;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
@@ -54,8 +55,14 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', env('LOG_STACK', 'single')),
+            'channels' => explode(',', env('LOG_STACK', 'database')),
             'ignore_exceptions' => false,
+        ],
+
+        'database' => [
+            'driver' => 'monolog',
+            'handler' => DatabaseLogHandler::class,
+            'level' => env('LOG_LEVEL', 'debug'),
         ],
 
         'single' => [
@@ -124,7 +131,7 @@ return [
         ],
 
         'emergency' => [
-            'path' => storage_path('logs/laravel.log'),
+            'path' => 'php://stderr',
         ],
 
     ],

@@ -93,6 +93,7 @@ class TatumClient
         if (isset($options['finality'])) {
             $payload['finality'] = $options['finality'];
         }
+        $payload = $this->sanitizeV4Payload($payload);
 
         return $this->postJsonV4('/subscription', $payload);
     }
@@ -148,6 +149,8 @@ class TatumClient
      */
     protected function postJsonV4(string $path, array $body): array
     {
+        $body = $this->sanitizeV4Payload($body);
+
         try {
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->timeout)
@@ -174,5 +177,20 @@ class TatumClient
             'x-api-key' => $this->apiKey,
             'Content-Type' => 'application/json',
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function sanitizeV4Payload(array $payload): array
+    {
+        unset($payload['contract_address'], $payload['contractAddress']);
+
+        if (isset($payload['attr']) && is_array($payload['attr'])) {
+            unset($payload['attr']['contract_address'], $payload['attr']['contractAddress']);
+        }
+
+        return $payload;
     }
 }

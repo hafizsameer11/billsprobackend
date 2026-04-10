@@ -12,6 +12,7 @@ use App\Support\PalmPayConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use OpenApi\Attributes as OA;
 
 class DepositController extends Controller
@@ -110,13 +111,32 @@ class DepositController extends Controller
                 'fee' => $result['deposit']->fee,
                 'total_amount' => $result['deposit']->total_amount,
             ], $result['message'] ?? 'Deposit initiated successfully.');
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            $errorId = (string) Str::uuid();
+
             Log::error('Initiate deposit error: '.$e->getMessage(), [
+                'error_id' => $errorId,
                 'user_id' => $request->user()->id,
+                'payload' => $request->except(['pin', 'password']),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while initiating deposit. Please try again.');
+            $debugInfo = [
+                'errorId' => $errorId,
+                'timestamp' => now()->toIso8601String(),
+                'action' => 'deposit.initiate',
+            ];
+
+            if (config('app.debug')) {
+                $debugInfo['exception'] = get_class($e);
+                $debugInfo['message'] = $e->getMessage();
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'An error occurred while initiating deposit. Please try again.',
+                'debugInfo' => $debugInfo,
+            ], 500);
         }
     }
 
