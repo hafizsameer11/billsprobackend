@@ -76,7 +76,8 @@ class PalmPayPayoutService
 
         if ($bankCode === '100033') {
             $full = $this->withCoreFields([
-                'accountNo' => $normalizedAccount,
+                // PalmPay account verification expects palmpayAccNo.
+                'palmpayAccNo' => $normalizedAccount,
             ]);
             $signature = $this->auth->signPayload($full);
             $url = $this->auth->resolvedBaseUrl().'/api/v2/payment/merchant/payout/queryAccount';
@@ -84,9 +85,12 @@ class PalmPayPayoutService
             return $this->postExpectData($url, $full, $signature);
         }
 
+        // queryBankAccount is sensitive to payload fields/version.
         $full = $this->withCoreFields([
+            // PalmPay expects V1.1 on this endpoint.
+            'version' => 'V1.1',
             'bankCode' => $bankCode,
-            'accountNo' => $normalizedAccount,
+            'bankAccNo' => $normalizedAccount,
         ]);
         $signature = $this->auth->signPayload($full);
         $url = $this->auth->resolvedBaseUrl().'/api/v2/payment/merchant/payout/queryBankAccount';
@@ -104,11 +108,11 @@ class PalmPayPayoutService
             $body['payeeBankAccNo'] = preg_replace('/\D/', '', $body['payeeBankAccNo']) ?? '';
         }
 
-        return array_merge($body, [
+        return array_merge([
             'requestTime' => $this->auth->requestTimeMs(),
             'version' => Config::get('palmpay.version', 'V2'),
             'nonceStr' => $this->auth->generateNonce(),
-        ]);
+        ], $body);
     }
 
     /**
