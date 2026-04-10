@@ -191,20 +191,16 @@ class PalmPayBillPaymentOrchestrator
             return '';
         }
 
-        if (str_starts_with($digits, '2340') && strlen($digits) >= 14) {
+        if (str_starts_with($digits, '234') && strlen($digits) >= 13) {
             return $digits;
         }
 
-        if (str_starts_with($digits, '234') && strlen($digits) === 13) {
-            return '2340'.substr($digits, 3);
-        }
-
         if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
-            return '2340'.substr($digits, 1);
+            return '234'.substr($digits, 1);
         }
 
         if (strlen($digits) === 10) {
-            return '2340'.$digits;
+            return '234'.$digits;
         }
 
         return $digits;
