@@ -46,9 +46,13 @@ class PalmPayAuthService
         $signString = $this->buildSignString($params);
         $md5Upper = strtoupper(md5($signString));
 
+        $rawPrivateKey = $this->rawPrivateKey();
         $privateKey = $this->resolvedPrivateKey();
         if ($privateKey === null) {
-            throw new RuntimeException('PALMPAY_PRIVATE_KEY is not configured.');
+            if ($rawPrivateKey === '') {
+                throw new RuntimeException('PALMPAY_PRIVATE_KEY is not configured.');
+            }
+            throw new RuntimeException('PALMPAY_PRIVATE_KEY is invalid. Provide PEM or base64-encoded PKCS8 private key.');
         }
 
         $signature = '';
@@ -102,33 +106,52 @@ class PalmPayAuthService
         ];
     }
 
+    private function rawPrivateKey(): string
+    {
+        $key = (string) Config::get('palmpay.private_key', '');
+        $key = trim(str_replace('\\n', "\n", $key));
+        $key = trim($key, "\"'");
+
+        return $key;
+    }
+
     /**
      * @return resource|\OpenSSLAsymmetricKey|null
      */
     private function resolvedPrivateKey()
     {
-        $key = (string) Config::get('palmpay.private_key', '');
-        $key = trim(str_replace('\\n', "\n", $key));
+        $key = $this->rawPrivateKey();
 
         if ($key === '') {
             return null;
         }
 
-        $candidate = $key;
-        if (! str_contains($candidate, 'BEGIN')) {
-            $decoded = base64_decode($candidate, true);
-            if (is_string($decoded) && $decoded !== '') {
-                $candidate = trim(str_replace('\\n', "\n", $decoded));
+        // 1) PEM directly
+        if (str_contains($key, 'BEGIN')) {
+            $res = openssl_pkey_get_private($key);
+            if ($res !== false) {
+                return $res;
             }
         }
 
-        if (! str_contains($candidate, 'BEGIN')) {
-            $candidate = "-----BEGIN PRIVATE KEY-----\n".
-                chunk_split(preg_replace('/\s+/', '', $candidate) ?? '', 64, "\n").
-                "-----END PRIVATE KEY-----";
+        // 2) Base64 body / DER encoded key
+        $keyNoWs = preg_replace('/\s+/', '', $key) ?? '';
+        $der = base64_decode($keyNoWs, true);
+        if ($der !== false && $der !== '') {
+            $pem = "-----BEGIN PRIVATE KEY-----\n".
+                chunk_split(base64_encode($der), 64, "\n").
+                "-----END PRIVATE KEY-----\n";
+            $res = openssl_pkey_get_private($pem);
+            if ($res !== false) {
+                return $res;
+            }
         }
 
-        $res = openssl_pkey_get_private($candidate);
+        // 3) Last attempt: interpret raw as body text and wrap
+        $pemFromBody = "-----BEGIN PRIVATE KEY-----\n".
+            chunk_split($keyNoWs, 64, "\n").
+            "-----END PRIVATE KEY-----\n";
+        $res = openssl_pkey_get_private($pemFromBody);
         if ($res === false) {
             return null;
         }
