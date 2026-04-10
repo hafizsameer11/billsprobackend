@@ -20,10 +20,14 @@ class KeyEncryptionService
     {
         $material = (string) env('ENCRYPTION_KEY', '');
         if ($material === '') {
-            if (config('tatum.use_mock')) {
-                $material = 'mock-derive-'.(string) config('app.key');
+            $appKey = (string) config('app.key', '');
+            if ($appKey !== '') {
+                // Fallback to Laravel APP_KEY so OTP/wallet bootstrap works without a separate key.
+                $material = 'app-key-fallback:'.$appKey;
+            } elseif (config('tatum.use_mock')) {
+                $material = 'mock-derive-'.$appKey;
             } else {
-                throw new RuntimeException('ENCRYPTION_KEY must be set for crypto key encryption.');
+                throw new RuntimeException('ENCRYPTION_KEY or APP_KEY must be set for crypto key encryption.');
             }
         }
 
