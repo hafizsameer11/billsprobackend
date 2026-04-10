@@ -106,7 +106,7 @@ class VirtualCardService
         }
 
         try {
-            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd, $data) {
+            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd, $data, $accountEmail) {
                 $providerCardId = $resolvedProviderCardId;
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
@@ -156,6 +156,7 @@ class VirtualCardService
                         'monthly_transaction_limit' => $data['monthly_transaction_limit'] ?? null,
                         'metadata' => [
                             'source' => 'provider',
+                            'provider_account_email' => (string) $accountEmail,
                             'payment_wallet_type' => $paymentWalletType,
                             'creation_fee_ngn' => $feeNgn,
                             'creation_fee_usd' => $feeUsd,
@@ -334,7 +335,7 @@ class VirtualCardService
         }
 
         $payload = [
-            'email' => $this->providerAccountEmail($user, $data),
+            'email' => $this->resolveProviderAccountEmail($user, $card, $data),
             'cardid' => $card->provider_card_id,
             'amount' => $principalUsd,
         ];
@@ -503,7 +504,7 @@ class VirtualCardService
 
         $user = User::findOrFail($userId);
         $payload = [
-            'email' => $user->email,
+            'email' => $this->resolveProviderAccountEmail($user, $card),
             'cardid' => $card->provider_card_id,
         ];
 
@@ -549,6 +550,9 @@ class VirtualCardService
             foreach ($cards as $providerCard) {
                 $providerCardId = (string) ($providerCard['cardid'] ?? $providerCard['id'] ?? '');
                 if ($providerCardId !== '') {
+                    $existingCard = VirtualCard::where('provider_card_id', $providerCardId)
+                        ->where('user_id', $userId)
+                        ->first();
                     $snapshot = $this->extractCardSnapshot(['data' => $providerCard], $providerCardId);
                     VirtualCard::updateOrCreate(
                         ['provider_card_id' => $providerCardId, 'user_id' => $userId],
@@ -561,7 +565,7 @@ class VirtualCardService
                             'provider' => 'mastercard_api',
                             'provider_status' => (string) ($providerCard['status'] ?? 'active'),
                             'currency' => 'USD',
-                            'balance' => (float) ($providerCard['balance'] ?? 0),
+                            'balance' => $this->extractBalance(['data' => $providerCard], (float) ($existingCard?->balance ?? 0)),
                             'provider_payload' => $providerCard,
                         ]
                     );
@@ -758,7 +762,7 @@ class VirtualCardService
         }
 
         $user = User::findOrFail($userId);
-        $payload = ['email' => $user->email, 'cardid' => $card->provider_card_id];
+        $payload = ['email' => $this->resolveProviderAccountEmail($user, $card), 'cardid' => $card->provider_card_id];
         try {
             $response = $apiAction($payload);
         } catch (MastercardApiException $exception) {
@@ -878,7 +882,36 @@ class VirtualCardService
 
     protected function extractBalance(array $response, ?float $fallback = 0): float
     {
-        $value = data_get($response, 'data.balance', data_get($response, 'balance', $fallback));
+        $candidates = [
+            data_get($response, 'data.balance'),
+            data_get($response, 'data.available_balance'),
+            data_get($response, 'data.availableBalance'),
+            data_get($response, 'data.card_balance'),
+            data_get($response, 'data.cardBalance'),
+            data_get($response, 'data.amount'),
+            data_get($response, 'balance'),
+            data_get($response, 'available_balance'),
+            data_get($response, 'availableBalance'),
+            data_get($response, 'card_balance'),
+            data_get($response, 'cardBalance'),
+            data_get($response, 'amount'),
+            $fallback,
+        ];
+
+        $value = $fallback;
+        foreach ($candidates as $candidate) {
+            if ($candidate === null || $candidate === '') {
+                continue;
+            }
+            $parsed = is_string($candidate)
+                ? (float) preg_replace('/[^\d\.\-]/', '', $candidate)
+                : (float) $candidate;
+
+            if (! is_nan($parsed)) {
+                $value = $parsed;
+                break;
+            }
+        }
 
         return (float) $value;
     }
@@ -909,5 +942,30 @@ class VirtualCardService
     protected function providerAccountEmail(User $user, array $data): string
     {
         return (string) ($data['email'] ?? $data['useremail'] ?? $user->email);
+    }
+
+    /**
+     * Resolve provider email for an existing card action.
+     *
+     * Preference order:
+     * 1) explicit request overrides
+     * 2) stored card metadata provider_account_email
+     * 3) authenticated user email
+     *
+     * @param array<string, mixed> $requestData
+     */
+    protected function resolveProviderAccountEmail(User $user, VirtualCard $card, array $requestData = []): string
+    {
+        $fromRequest = (string) ($requestData['email'] ?? $requestData['useremail'] ?? '');
+        if ($fromRequest !== '') {
+            return $fromRequest;
+        }
+
+        $metaEmail = (string) data_get($card->metadata ?? [], 'provider_account_email', '');
+        if ($metaEmail !== '') {
+            return $metaEmail;
+        }
+
+        return (string) $user->email;
     }
 }
