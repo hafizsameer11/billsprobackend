@@ -631,34 +631,42 @@ class VirtualCardService
             if ($txPath !== '') {
                 try {
                     $providerResponse = $this->mastercardApiClient->merchantMasterTransactions([
-                        'email' => $user->email,
+                        'email' => $this->resolveProviderAccountEmail($user, $card),
                         'cardid' => $card->provider_card_id,
                     ]);
-                    $providerTransactions = $providerResponse['data'] ?? [];
-                    if (is_array($providerTransactions)) {
-                        foreach ($providerTransactions as $providerTransaction) {
-                            if (! is_array($providerTransaction)) {
-                                continue;
-                            }
-                            VirtualCardTransaction::updateOrCreate(
-                                [
-                                    'virtual_card_id' => $cardId,
-                                    'provider_transaction_id' => (string) ($providerTransaction['id'] ?? $providerTransaction['reference'] ?? ''),
-                                ],
-                                [
-                                    'user_id' => $userId,
-                                    'type' => (string) ($providerTransaction['type'] ?? 'provider'),
-                                    'status' => (string) ($providerTransaction['status'] ?? 'completed'),
-                                    'currency' => (string) ($providerTransaction['currency'] ?? 'USD'),
-                                    'amount' => (float) ($providerTransaction['amount'] ?? 0),
-                                    'fee' => (float) ($providerTransaction['fee'] ?? 0),
-                                    'total_amount' => (float) ($providerTransaction['total_amount'] ?? $providerTransaction['amount'] ?? 0),
-                                    'reference' => (string) ($providerTransaction['reference'] ?? null),
-                                    'description' => (string) ($providerTransaction['description'] ?? 'Provider card transaction'),
-                                    'provider_payload' => $providerTransaction,
-                                ]
-                            );
+                    $providerTransactions = $this->extractProviderTransactionsFromResponse($providerResponse);
+                    foreach ($providerTransactions as $providerTransaction) {
+                        if (! is_array($providerTransaction)) {
+                            continue;
                         }
+
+                        $providerTxId = (string) ($providerTransaction['id']
+                            ?? $providerTransaction['transaction_id']
+                            ?? $providerTransaction['reference']
+                            ?? $providerTransaction['txid']
+                            ?? '');
+                        if ($providerTxId === '') {
+                            $providerTxId = 'provider_'.md5(json_encode($providerTransaction) ?: uniqid((string) $cardId, true));
+                        }
+
+                        VirtualCardTransaction::updateOrCreate(
+                            [
+                                'virtual_card_id' => $cardId,
+                                'provider_transaction_id' => $providerTxId,
+                            ],
+                            [
+                                'user_id' => $userId,
+                                'type' => (string) ($providerTransaction['type'] ?? 'provider'),
+                                'status' => (string) ($providerTransaction['status'] ?? 'completed'),
+                                'currency' => (string) ($providerTransaction['currency'] ?? 'USD'),
+                                'amount' => (float) ($providerTransaction['amount'] ?? 0),
+                                'fee' => (float) ($providerTransaction['fee'] ?? 0),
+                                'total_amount' => (float) ($providerTransaction['total_amount'] ?? $providerTransaction['amount'] ?? 0),
+                                'reference' => (string) ($providerTransaction['reference'] ?? null),
+                                'description' => (string) ($providerTransaction['description'] ?? 'Provider card transaction'),
+                                'provider_payload' => $providerTransaction,
+                            ]
+                        );
                     }
                 } catch (MastercardApiException) {
                     // return local cache
@@ -942,6 +950,37 @@ class VirtualCardService
     protected function providerAccountEmail(User $user, array $data): string
     {
         return (string) ($data['email'] ?? $data['useremail'] ?? $user->email);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    protected function extractProviderTransactionsFromResponse(array $response): array
+    {
+        $candidates = [
+            data_get($response, 'data.transactions'),
+            data_get($response, 'data.transaction'),
+            data_get($response, 'data.items'),
+            data_get($response, 'transactions'),
+            data_get($response, 'transaction'),
+            data_get($response, 'items'),
+            data_get($response, 'data'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (! is_array($candidate) || $candidate === []) {
+                continue;
+            }
+
+            $isAssoc = array_keys($candidate) !== range(0, count($candidate) - 1);
+            if ($isAssoc) {
+                return [$candidate];
+            }
+
+            return array_values(array_filter($candidate, 'is_array'));
+        }
+
+        return [];
     }
 
     /**
