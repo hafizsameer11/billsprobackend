@@ -7,6 +7,7 @@ use App\Models\FiatWallet;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\PalmPay\PalmPayPayoutService;
+use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use App\Support\PalmPayConfig;
 use Illuminate\Support\Facades\Config;
@@ -22,7 +23,8 @@ class WithdrawalService
 
     public function __construct(
         WalletService $walletService,
-        protected PalmPayPayoutService $palmPayPayout
+        protected PalmPayPayoutService $palmPayPayout,
+        protected PlatformRateResolver $platformRates
     ) {
         $this->walletService = $walletService;
     }
@@ -232,7 +234,7 @@ class WithdrawalService
             throw new \Exception('Account name is required');
         }
 
-        $fee = $this->withdrawalFee;
+        $fee = $this->getWithdrawalFee();
         $totalAmount = $amount + $fee;
 
         $webhookBase = rtrim((string) Config::get('palmpay.webhook_url'), '/');
@@ -390,7 +392,7 @@ class WithdrawalService
             }
 
             // Calculate total amount (amount + fee)
-            $fee = $this->withdrawalFee;
+            $fee = $this->getWithdrawalFee();
             $totalAmount = $amount + $fee;
 
             // Get fiat wallet with lock
@@ -488,7 +490,7 @@ class WithdrawalService
             throw new \Exception('bank_code is required for withdrawals. Add the PalmPay bank code on your bank account (e.g. 058 for GTBank).');
         }
 
-        $fee = $this->withdrawalFee;
+        $fee = $this->getWithdrawalFee();
         $totalAmount = $amount + $fee;
 
         $webhookBase = rtrim((string) Config::get('palmpay.webhook_url'), '/');
@@ -735,7 +737,7 @@ class WithdrawalService
      */
     public function getWithdrawalFee(): float
     {
-        return $this->withdrawalFee;
+        return $this->platformRates->fiatWithdrawalFeeNgn($this->withdrawalFee);
     }
 
     /**

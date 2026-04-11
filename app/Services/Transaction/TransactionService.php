@@ -105,11 +105,29 @@ class TransactionService
      */
     public function getTransaction(int $userId, string $transactionId)
     {
-        // First, try to find in regular Transaction model
+        // Numeric path segments from the app usually mean DB primary key (e.g. bill list tap).
+        // Resolving transaction_id first would wrongly match another row whose transaction_id equals that string.
+        if (ctype_digit($transactionId)) {
+            $transaction = Transaction::where('user_id', $userId)
+                ->where('id', (int) $transactionId)
+                ->first();
+            if ($transaction) {
+                return $transaction;
+            }
+        }
+
         $transaction = Transaction::where('user_id', $userId)
             ->where('transaction_id', $transactionId)
             ->first();
 
+        if ($transaction) {
+            return $transaction;
+        }
+
+        // Bill orders often use `reference` / outOrderNo
+        $transaction = Transaction::where('user_id', $userId)
+            ->where('reference', $transactionId)
+            ->first();
         if ($transaction) {
             return $transaction;
         }

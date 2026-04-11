@@ -33,7 +33,7 @@ class AdminCryptoTreasuryController extends Controller
             $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
 
             return ResponseHelper::success(
-                $this->treasury->paginateDeposits($perPage),
+                $this->treasury->paginateDeposits($perPage, $request),
                 'Deposits retrieved.'
             );
         } catch (\Throwable $e) {
@@ -62,7 +62,8 @@ class AdminCryptoTreasuryController extends Controller
     public function storeSweep(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'vendor_id' => 'required|integer|exists:crypto_vendors,id',
+            'sweep_target' => 'required|string|in:vendor,master',
+            'vendor_id' => 'required_if:sweep_target,vendor|nullable|integer|exists:crypto_vendors,id',
             'virtual_account_id' => 'required|integer|exists:virtual_accounts,id',
             'amount' => 'required|numeric|min:0.00000001',
         ]);
@@ -70,12 +71,16 @@ class AdminCryptoTreasuryController extends Controller
         try {
             $order = $this->treasury->createSweepOrder(
                 $request->user()->id,
-                (int) $data['vendor_id'],
                 (int) $data['virtual_account_id'],
-                (string) $data['amount']
+                (string) $data['amount'],
+                (string) $data['sweep_target'],
+                isset($data['vendor_id']) ? (int) $data['vendor_id'] : null
             );
 
-            return ResponseHelper::success($order->load('vendor'), 'Sweep order created (pending on-chain execution).');
+            return ResponseHelper::success(
+                $order->load(['vendor', 'masterWallet']),
+                'Sweep order created (pending on-chain execution).'
+            );
         } catch (\RuntimeException $e) {
             return ResponseHelper::error($e->getMessage(), 400);
         } catch (\Throwable $e) {
@@ -118,7 +123,7 @@ class AdminCryptoTreasuryController extends Controller
         try {
             $order = $this->treasury->executeSweepOnChain($id, $request->user()->id);
 
-            return ResponseHelper::success($order->load('vendor'), 'Sweep broadcast on-chain.');
+            return ResponseHelper::success($order->load(['vendor', 'masterWallet']), 'Sweep broadcast on-chain.');
         } catch (\RuntimeException $e) {
             return ResponseHelper::error($e->getMessage(), 400);
         } catch (\Throwable $e) {

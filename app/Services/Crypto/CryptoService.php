@@ -8,6 +8,7 @@ use App\Models\MasterWalletTransaction;
 use App\Models\Transaction;
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
+use App\Services\Platform\PlatformRateResolver;
 use App\Services\Tatum\DepositAddressService;
 use App\Services\Tatum\TatumOutboundTxService;
 use App\Services\Transaction\TransactionService;
@@ -42,7 +43,8 @@ class CryptoService
         TransactionService $transactionService,
         WalletService $walletService,
         protected DepositAddressService $depositAddressService,
-        protected TatumOutboundTxService $tatumOutbound
+        protected TatumOutboundTxService $tatumOutbound,
+        protected PlatformRateResolver $platformRates
     ) {
         $this->cryptoWalletService = $cryptoWalletService;
         $this->transactionService = $transactionService;
@@ -81,7 +83,7 @@ class CryptoService
     {
         $accounts = VirtualAccount::where('user_id', $userId)
             ->where('active', true)
-            ->with('walletCurrency')
+            ->with('walletCurrency.exchangeRate')
             ->get();
 
         $grouped = [];
@@ -106,7 +108,7 @@ class CryptoService
                 $totalUsdtBalance += $balance;
 
                 if ($account->walletCurrency) {
-                    $rate = (float) ($account->walletCurrency->rate ?? 0);
+                    $rate = $account->walletCurrency->usdPerUnitForDisplay();
                     $totalUsdtUsdValue += $balance * $rate;
 
                     $blockchains[] = [
@@ -146,14 +148,14 @@ class CryptoService
                 ->where('currency', 'USDT')
                 ->where('blockchain', $blockchain)
                 ->where('active', true)
-                ->with('walletCurrency')
+                ->with('walletCurrency.exchangeRate')
                 ->first();
         } else {
             // For non-USDT or USDT without blockchain, get first matching account
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', $currency)
                 ->where('active', true)
-                ->with('walletCurrency')
+                ->with('walletCurrency.exchangeRate')
                 ->first();
         }
 
@@ -289,8 +291,15 @@ class CryptoService
             ];
         }
 
-        $rate = (float) $walletCurrency->rate; // USD per 1 unit
-        if ($rate <= 0) {
+        // Buy path: NGN → crypto uses rate_buy; sell path: crypto → NGN uses rate_sell (`crypto_exchange_rates`).
+        $isBuyWithNgn = $fromCurrency === 'NGN' && $toCurrency !== 'NGN';
+        $rateUsdPerCrypto = $isBuyWithNgn
+            ? $walletCurrency->usdPerUnitForBuy()
+            : ($fromCurrency !== 'NGN' && $toCurrency === 'NGN'
+                ? $walletCurrency->usdPerUnitForSell()
+                : (float) ($walletCurrency->rate ?? 0));
+
+        if ($rateUsdPerCrypto <= 0) {
             return [
                 'success' => false,
                 'message' => 'Exchange rate not configured for this asset',
@@ -302,11 +311,11 @@ class CryptoService
 
         if ($fromCurrency === 'NGN' && $toCurrency !== 'NGN') {
             $ngnToUsd = 1 / $ngnPerUsd;
-            $exchangeRate = $ngnToUsd / $rate;
+            $exchangeRate = $ngnToUsd / $rateUsdPerCrypto;
             $cryptoAmount = $amount * $exchangeRate;
             $fiatAmount = $amount;
         } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
-            $exchangeRate = $rate * $ngnPerUsd;
+            $exchangeRate = $rateUsdPerCrypto * $ngnPerUsd;
             $cryptoAmount = $amount;
             $fiatAmount = $amount * $exchangeRate;
         } else {
@@ -324,7 +333,9 @@ class CryptoService
                 'exchange_rate' => $exchangeRate,
                 'crypto_amount' => $cryptoAmount,
                 'fiat_amount' => $fiatAmount,
-                'rate' => $rate,
+                'rate' => $rateUsdPerCrypto,
+                'rate_buy' => $walletCurrency->usdPerUnitForBuy(),
+                'rate_sell' => $walletCurrency->usdPerUnitForSell(),
             ],
         ];
     }
@@ -370,14 +381,17 @@ class CryptoService
         $cryptoAmount = $rateData['data']['crypto_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
 
-        // Calculate fees
-        $feePercent = self::BUY_FEE_PERCENT;
+        $feeRow = $this->platformRates->findCrypto('buy', $currency, $blockchain);
+        $feePercent = $feeRow && $feeRow->percentage_fee !== null
+            ? (float) $feeRow->percentage_fee / 100.0
+            : self::BUY_FEE_PERCENT;
         $feeInCrypto = $cryptoAmount * $feePercent;
         $totalCryptoAmount = $cryptoAmount + $feeInCrypto;
 
         // Convert fee to payment currency
         $feeInPaymentCurrency = $feeInCrypto / $exchangeRate;
-        $totalAmount = $amount + $feeInPaymentCurrency;
+        $fixedNgn = $feeRow ? (float) $feeRow->fixed_fee_ngn : 0.0;
+        $totalAmount = $amount + $feeInPaymentCurrency + $fixedNgn;
 
         return [
             'success' => true,
@@ -515,7 +529,7 @@ class CryptoService
 
                 // Refresh account with relationships
                 $account->refresh();
-                $account->load('walletCurrency');
+                $account->load('walletCurrency.exchangeRate');
             }
 
             // Create transaction
@@ -547,7 +561,7 @@ class CryptoService
                 'message' => 'Crypto purchase completed successfully',
                 'data' => [
                     'transaction' => $transaction,
-                    'account' => $account ? $this->formatAccount($account->load('walletCurrency')) : null,
+                    'account' => $account ? $this->formatAccount($account->load('walletCurrency.exchangeRate')) : null,
                     'fiat_wallet' => isset($fiatWallet) ? $fiatWallet->fresh() : null,
                 ],
             ];
@@ -576,7 +590,7 @@ class CryptoService
             ->where('currency', $currency)
             ->where('blockchain', $blockchain)
             ->where('active', true)
-            ->with('walletCurrency')
+            ->with('walletCurrency.exchangeRate')
             ->first();
 
         if (! $account) {
@@ -622,12 +636,15 @@ class CryptoService
         $ngnAmount = $rateData['data']['fiat_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
 
-        // Calculate fees
-        $feePercent = self::SELL_FEE_PERCENT;
+        $feeRow = $this->platformRates->findCrypto('sell', $currency, $blockchain);
+        $feePercent = $feeRow && $feeRow->percentage_fee !== null
+            ? (float) $feeRow->percentage_fee / 100.0
+            : self::SELL_FEE_PERCENT;
         $feeInCrypto = $amount * $feePercent;
         $feeInNgn = $feeInCrypto * $exchangeRate;
+        $fixedNgn = $feeRow ? (float) $feeRow->fixed_fee_ngn : 0.0;
         $totalCryptoAmount = $amount + $feeInCrypto;
-        $amountToReceive = $ngnAmount - $feeInNgn;
+        $amountToReceive = $ngnAmount - $feeInNgn - $fixedNgn;
 
         return [
             'success' => true,
@@ -723,7 +740,7 @@ class CryptoService
 
             // Refresh account with relationships
             $account->refresh();
-            $account->load('walletCurrency');
+            $account->load('walletCurrency.exchangeRate');
 
             $fiatWallet->increment('balance', $previewData['amount_to_receive']);
 
@@ -755,7 +772,7 @@ class CryptoService
                 'message' => 'Crypto sale completed successfully',
                 'data' => [
                     'transaction' => $transaction,
-                    'account' => $this->formatAccount($account->load('walletCurrency')),
+                    'account' => $this->formatAccount($account->load('walletCurrency.exchangeRate')),
                     'fiat_wallet' => $fiatWallet->fresh(),
                 ],
             ];
@@ -789,8 +806,22 @@ class CryptoService
 
         $walletCurrency = WalletCurrency::findActiveForCrypto($currency, $blockchain);
 
-        $rate = $walletCurrency ? (float) $walletCurrency->rate : 1.0;
+        $rate = $walletCurrency ? $walletCurrency->usdPerUnitForSell() : 1.0;
+        if ($rate <= 0) {
+            $rate = 1.0;
+        }
+        $feeRow = $this->platformRates->findCrypto('send', $currency, $blockchain);
+        $ngnPerUsd = (float) config('crypto.ngn_per_usd', self::DEFAULT_EXCHANGE_RATE);
         $feeInCrypto = self::SEND_FEE_USD / $rate;
+        if ($feeRow && ($feeRow->percentage_fee !== null || (float) $feeRow->fixed_fee_ngn > 0)) {
+            $feeInCrypto = 0.0;
+            if ($feeRow->percentage_fee !== null) {
+                $feeInCrypto += $amount * ((float) $feeRow->percentage_fee / 100.0);
+            }
+            if ((float) $feeRow->fixed_fee_ngn > 0) {
+                $feeInCrypto += ((float) $feeRow->fixed_fee_ngn / max($ngnPerUsd, 0.0001)) / max($rate, 0.0000001);
+            }
+        }
         $totalAmount = $amount + $feeInCrypto;
 
         $normalizedChain = DepositAddressService::normalizeBlockchain($blockchain);
@@ -985,9 +1016,10 @@ class CryptoService
      */
     protected function formatAccount(VirtualAccount $account): array
     {
+        $account->loadMissing('walletCurrency.exchangeRate');
         $walletCurrency = $account->walletCurrency;
         $balance = (float) $account->available_balance;
-        $rate = $walletCurrency ? (float) ($walletCurrency->rate ?? 0) : 0;
+        $rate = $walletCurrency ? $walletCurrency->usdPerUnitForDisplay() : 0.0;
         $usdValue = $balance * $rate;
 
         return [
@@ -1036,7 +1068,7 @@ class CryptoService
             ->where('currency', $normalizedCurrency)
             ->whereRaw('LOWER(blockchain) = ?', [strtolower($normalizedBlockchain)])
             ->where('active', true)
-            ->with('walletCurrency')
+            ->with('walletCurrency.exchangeRate')
             ->first();
     }
 }

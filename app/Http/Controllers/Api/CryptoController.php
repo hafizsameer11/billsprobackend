@@ -13,7 +13,7 @@ use OpenApi\Attributes as OA;
 
 #[OA\Tag(
     name: 'Crypto',
-    description: 'Crypto virtual accounts: balances, on-chain deposit addresses via Tatum (default), buy/sell, and send. Deposit responses keep the same JSON shape (`success`, `message`, `data` with `deposit_address`, `qr_code`, `account_id`, etc.). Use `TATUM_USE_MOCK=true` only for local dev without Tatum.'
+    description: 'Crypto virtual accounts: balances, on-chain deposit addresses via Tatum, buy/sell, and send. Production uses real Tatum (`TATUM_USE_MOCK=false`). Deposit responses keep the same JSON shape (`success`, `message`, `data` with `deposit_address`, `qr_code`, `account_id`, etc.).'
 )]
 class CryptoController extends Controller
 {
@@ -107,7 +107,7 @@ class CryptoController extends Controller
     #[OA\Get(
         path: '/api/crypto/deposit-address',
         summary: 'Get deposit address',
-        description: 'Returns the persisted on-chain deposit address for this currency/blockchain. Default: created with **Tatum** (user wallet + address + V4 webhook subscription). Mock strings are used only when env `TATUM_USE_MOCK=true`. Response envelope is unchanged: `success`, `message`, `data`.',
+        description: 'Returns the persisted on-chain deposit address for this currency/blockchain (Tatum user wallet + V4 webhooks when `TATUM_USE_MOCK=false`). Response envelope: `success`, `message`, `data`.',
         security: [['sanctum' => []]],
         tags: ['Crypto']
     )]

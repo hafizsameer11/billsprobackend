@@ -9,6 +9,7 @@ use App\Models\Beneficiary;
 use App\Models\Transaction;
 use App\Models\FiatWallet;
 use App\Services\Auth\AuthService;
+use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -20,7 +21,8 @@ class BillPaymentService
 
     public function __construct(
         AuthService $authService,
-        WalletService $walletService
+        WalletService $walletService,
+        protected PlatformRateResolver $platformRates
     ) {
         $this->authService = $authService;
         $this->walletService = $walletService;
@@ -143,22 +145,11 @@ class BillPaymentService
     }
 
     /**
-     * Calculate fee
+     * Calculate fee (admin platform_rates or legacy formula).
      */
-    protected function calculateFee(float $amount, string $currency): float
+    protected function calculateFee(float $amount, string $currency, string $billCategoryCode): float
     {
-        $feePercent = 0.01; // 1%
-        $calculatedFee = $amount * $feePercent;
-
-        $minFees = [
-            'NGN' => 20,
-            'USD' => 0.1,
-            'KES' => 2,
-            'GHS' => 0.5,
-        ];
-
-        $minFee = $minFees[$currency] ?? 0.1;
-        return max($calculatedFee, $minFee);
+        return $this->platformRates->billPaymentFeeNgn($amount, $currency, $billCategoryCode);
     }
 
     /**
@@ -200,7 +191,7 @@ class BillPaymentService
 
         // Calculate fee
         $currency = $data['currency'] ?? 'NGN';
-        $fee = $this->calculateFee($amount, $currency);
+        $fee = $this->calculateFee($amount, $currency, $category->code);
         $totalAmount = $amount + $fee;
 
         // Get wallet balance
@@ -230,7 +221,7 @@ class BillPaymentService
                 'amount' => $amount,
                 'currency' => $currency,
                 'fee' => $fee,
-                'fee_percent' => 1.0, // 1%
+                'fee_percent' => $this->platformRates->billPaymentFeePercentDisplay($category->code),
                 'total_amount' => $totalAmount,
                 'wallet_balance' => $walletBalance,
                 'sufficient_balance' => $walletBalance >= $totalAmount,
@@ -320,7 +311,7 @@ class BillPaymentService
         }
 
         // Calculate fee
-        $fee = $this->calculateFee($amount, $data['currency'] ?? 'NGN');
+        $fee = $this->calculateFee($amount, $data['currency'] ?? 'NGN', $category->code);
         $totalAmount = $amount + $fee;
 
         // Note: Balance check is done here for early validation

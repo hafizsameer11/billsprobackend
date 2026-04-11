@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SupportTicket extends Model
 {
@@ -40,6 +41,11 @@ class SupportTicket extends Model
     public function assignedAdmin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    public function messages(): HasMany
+    {
+        return $this->hasMany(SupportTicketMessage::class, 'support_ticket_id')->orderBy('created_at');
     }
 
     /**

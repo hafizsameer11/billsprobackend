@@ -8,7 +8,10 @@ use Illuminate\Support\Facades\DB;
 return new class extends Migration
 {
     /**
-     * Run the migrations.
+     * Add user_id to bank_accounts (per-user uniqueness on account_number).
+     * Apply with `php artisan migrate` only — do not run ad-hoc SQL for this change.
+     *
+     * Note: `change()` requires doctrine/dbal (`composer require doctrine/dbal`).
      */
     public function up(): void
     {

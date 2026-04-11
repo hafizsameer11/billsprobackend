@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Services\Tatum\DepositAddressService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class WalletCurrency extends Model
 {
@@ -37,6 +38,58 @@ class WalletCurrency extends Model
     }
 
     /**
+     * Buy/sell USD-per-unit spreads for internal NGN ↔ crypto (see CryptoExchangeRate).
+     */
+    public function exchangeRate(): HasOne
+    {
+        return $this->hasOne(CryptoExchangeRate::class);
+    }
+
+    /**
+     * USD per 1 crypto unit when user buys crypto with NGN (from exchange_rates, else legacy `rate`).
+     */
+    public function usdPerUnitForBuy(): float
+    {
+        $this->loadMissing('exchangeRate');
+        $b = $this->exchangeRate ? (float) $this->exchangeRate->rate_buy : 0.0;
+
+        return $b > 0 ? $b : (float) ($this->rate ?? 0);
+    }
+
+    /**
+     * USD per 1 crypto unit when user sells crypto for NGN (from exchange_rates, else legacy `rate`).
+     */
+    public function usdPerUnitForSell(): float
+    {
+        $this->loadMissing('exchangeRate');
+        $s = $this->exchangeRate ? (float) $this->exchangeRate->rate_sell : 0.0;
+
+        return $s > 0 ? $s : (float) ($this->rate ?? 0);
+    }
+
+    /**
+     * Mid of buy/sell for portfolio display and deposit USD estimates (else `rate`).
+     */
+    public function usdPerUnitForDisplay(): float
+    {
+        $this->loadMissing('exchangeRate');
+        $buy = $this->exchangeRate ? (float) $this->exchangeRate->rate_buy : 0.0;
+        $sell = $this->exchangeRate ? (float) $this->exchangeRate->rate_sell : 0.0;
+        $legacy = (float) ($this->rate ?? 0);
+        if ($buy > 0 && $sell > 0) {
+            return ($buy + $sell) / 2.0;
+        }
+        if ($buy > 0) {
+            return $buy;
+        }
+        if ($sell > 0) {
+            return $sell;
+        }
+
+        return $legacy;
+    }
+
+    /**
      * Get the virtual accounts for the wallet currency.
      */
     public function virtualAccounts(): HasMany
@@ -56,10 +109,10 @@ class WalletCurrency extends Model
         if ($blockchainInput !== null && trim($blockchainInput) !== '') {
             $b = DepositAddressService::normalizeBlockchain($blockchainInput);
 
-            return $q->whereRaw('LOWER(blockchain) = ?', [strtolower($b)])->first();
+            return $q->whereRaw('LOWER(blockchain) = ?', [strtolower($b)])->with('exchangeRate')->first();
         }
 
-        $rows = $q->get();
+        $rows = $q->with('exchangeRate')->get();
 
         return $rows->count() === 1 ? $rows->first() : null;
     }

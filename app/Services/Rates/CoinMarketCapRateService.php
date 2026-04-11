@@ -2,6 +2,7 @@
 
 namespace App\Services\Rates;
 
+use App\Models\CryptoExchangeRate;
 use App\Models\WalletCurrency;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
@@ -60,6 +61,12 @@ class CoinMarketCapRateService
                 $wc->naira_price = (string) ($priceUsd * $ngnPerUsd);
                 $wc->price = (string) $priceUsd;
                 $wc->save();
+
+                CryptoExchangeRate::query()->updateOrCreate(
+                    ['wallet_currency_id' => $wc->id],
+                    ['rate_buy' => $priceUsd, 'rate_sell' => $priceUsd]
+                );
+
                 $updated++;
             }
         });

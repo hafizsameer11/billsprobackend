@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
 use App\Services\Crypto\CryptoWalletService;
+use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,7 @@ class VirtualCardService
         protected MastercardApiClient $mastercardApiClient,
         protected WalletService $walletService,
         protected CryptoWalletService $cryptoWalletService,
+        protected PlatformRateResolver $platformRates,
     ) {}
 
     /**
@@ -216,8 +218,13 @@ class VirtualCardService
     protected function computeCreationFeeNgn(): float
     {
         $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
-        $processing = (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
-        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $r = $this->platformRates->findVirtualCard('creation');
+        $rate = $r && $r->exchange_rate_ngn_per_usd !== null
+            ? (float) $r->exchange_rate_ngn_per_usd
+            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $processing = $r
+            ? (float) $r->fixed_fee_ngn
+            : (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
 
         return ($usd * $rate) + $processing;
     }
@@ -225,8 +232,13 @@ class VirtualCardService
     protected function computeCreationFeeUsd(): float
     {
         $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
-        $processingNgn = (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
-        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $r = $this->platformRates->findVirtualCard('creation');
+        $rate = $r && $r->exchange_rate_ngn_per_usd !== null
+            ? (float) $r->exchange_rate_ngn_per_usd
+            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $processingNgn = $r
+            ? (float) $r->fixed_fee_ngn
+            : (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
 
         return $usd + ($processingNgn / max($rate, 0.0001));
     }
@@ -246,11 +258,18 @@ class VirtualCardService
      */
     protected function computeFundWalletCharges(float $principalUsd, string $paymentWalletType, string $fiatCurrency): array
     {
-        $rate = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $processingNgn = (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
+        $r = $this->platformRates->findVirtualCard('fund');
+        $rate = $r && $r->exchange_rate_ngn_per_usd !== null
+            ? (float) $r->exchange_rate_ngn_per_usd
+            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $processingNgn = $r
+            ? (float) $r->fixed_fee_ngn
+            : (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
         $includeLoad = (bool) config('virtual_card.fund_include_provider_load_fee', false);
         $flat = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
-        $pct = (float) config('virtual_card.fund_load_percent', 1.0);
+        $pct = $r && $r->percentage_fee !== null
+            ? (float) $r->percentage_fee
+            : (float) config('virtual_card.fund_load_percent', 1.0);
 
         $loadFeeUsd = 0.0;
         if ($includeLoad) {
@@ -601,6 +620,13 @@ class VirtualCardService
                 'cardid' => $card->provider_card_id,
             ]);
 
+            Log::channel('database')->info('[virtual_card] get_card_details complete provider response', [
+                'user_id' => $userId,
+                'virtual_card_id' => $cardId,
+                'provider_card_id' => $card->provider_card_id,
+                'provider_response' => $response,
+            ]);
+
             $snapshot = $this->extractCardSnapshot($response, $card->provider_card_id);
             $card->update([
                 'card_name' => $snapshot['card_name'],
@@ -635,6 +661,12 @@ class VirtualCardService
                     'email' => $this->resolveProviderAccountEmail($user, $card),
                     'cardid' => $card->provider_card_id,
                 ]);
+                Log::channel('database')->info('[virtual_card] merchant_master_transactions complete provider response', [
+                    'user_id' => $userId,
+                    'virtual_card_id' => $cardId,
+                    'provider_card_id' => $card->provider_card_id,
+                    'provider_response' => $providerResponse,
+                ]);
                 $this->syncProviderTransactions($userId, $cardId, $providerResponse);
             } catch (MastercardApiException) {
                 // If provider has no dedicated transactions endpoint, attempt sync from card details.
@@ -642,6 +674,12 @@ class VirtualCardService
                     $cardDetailsResponse = $this->mastercardApiClient->getMerchantMasterCard([
                         'email' => $this->resolveProviderAccountEmail($user, $card),
                         'cardid' => $card->provider_card_id,
+                    ]);
+                    Log::channel('database')->info('[virtual_card] get_card_details fallback (tx list) complete provider response', [
+                        'user_id' => $userId,
+                        'virtual_card_id' => $cardId,
+                        'provider_card_id' => $card->provider_card_id,
+                        'provider_response' => $cardDetailsResponse,
                     ]);
                     $this->syncProviderTransactions($userId, $cardId, $cardDetailsResponse);
                 } catch (MastercardApiException) {

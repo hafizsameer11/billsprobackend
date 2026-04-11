@@ -3,6 +3,7 @@
 namespace App\Services\Support;
 
 use App\Models\SupportTicket;
+use App\Models\SupportTicketMessage;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -62,6 +63,13 @@ class SupportService
             'issue_type' => $data['issue_type'] ?? 'general',
             'status' => 'open',
             'priority' => $data['priority'] ?? 'medium',
+        ]);
+
+        SupportTicketMessage::create([
+            'support_ticket_id' => $ticket->id,
+            'sender_role' => SupportTicketMessage::ROLE_USER,
+            'user_id' => $userId,
+            'body' => $data['description'],
         ]);
 
         return $ticket->load(['user', 'assignedAdmin']);

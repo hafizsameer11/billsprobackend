@@ -6,10 +6,15 @@ use App\Models\BankAccount;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\Transaction;
+use App\Services\Platform\PlatformRateResolver;
 use Illuminate\Support\Facades\DB;
 
 class DepositService
 {
+    public function __construct(
+        protected PlatformRateResolver $platformRates
+    ) {}
+
     /**
      * Get active bank account for deposits
      */
@@ -164,8 +169,7 @@ class DepositService
      */
     protected function calculateFee(float $amount): float
     {
-        // Fixed fee of N200 for instant transfer
-        return 200.0;
+        return $this->platformRates->fiatDepositFeeNgn(200.0);
     }
 
     /**

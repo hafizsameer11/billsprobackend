@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\CryptoDepositAddress;
+use App\Models\MasterWallet;
 use App\Models\TatumRawWebhook;
 use App\Models\TatumWebhookResponse;
 use App\Models\Transaction;
@@ -77,6 +78,26 @@ class ProcessTatumWebhookJob implements ShouldQueue
             return;
         }
 
+        $masterAddresses = MasterWallet::query()
+            ->whereNotNull('address')
+            ->pluck('address')
+            ->map(fn (string $a) => strtolower($a))
+            ->all();
+
+        $accountIdField = $data['accountId'] ?? $data['account_id'] ?? null;
+        if (is_string($accountIdField) && $accountIdField !== '') {
+            $va = VirtualAccount::query()
+                ->where('account_id', $accountIdField)
+                ->where('active', true)
+                ->with('walletCurrency')
+                ->first();
+            if ($va) {
+                $this->processAccountIdIncoming($data, $va, $subscriptionType, $txId, $masterAddresses);
+
+                return;
+            }
+        }
+
         $isAddressWebhook = in_array($subscriptionType, [
             'ADDRESS_EVENT',
             'INCOMING_NATIVE_TX',
@@ -88,16 +109,35 @@ class ProcessTatumWebhookJob implements ShouldQueue
         }
 
         $webhookAddress = $data['address'] ?? $data['to'] ?? null;
-        $counterAddress = $data['counterAddress'] ?? $data['from'] ?? null;
+        if (! $webhookAddress) {
+            throw new \RuntimeException('Missing receiving address in webhook payload');
+        }
 
-        if (! $counterAddress) {
-            Log::info('Tatum webhook ignored (no counterAddress / sender)', ['txId' => $txId]);
+        if ($this->isMasterAddress((string) $webhookAddress, $masterAddresses)) {
+            Log::info('Tatum webhook ignored (monitored address is master wallet)', [
+                'txId' => $txId,
+                'address' => $webhookAddress,
+            ]);
 
             return;
         }
 
-        if (! $webhookAddress) {
-            throw new \RuntimeException('Missing receiving address in webhook payload');
+        $counterparty = $this->resolveCounterpartyAddress($data);
+        if ($counterparty === null || $counterparty === '') {
+            if ($subscriptionType === 'ADDRESS_EVENT') {
+                Log::info('Tatum webhook ignored (ADDRESS_EVENT without counterparty)', ['txId' => $txId]);
+
+                return;
+            }
+            Log::info('Tatum webhook ignored (no counterparty / sender)', ['txId' => $txId]);
+
+            return;
+        }
+
+        if ($this->isMasterAddress($counterparty, $masterAddresses)) {
+            Log::info('Tatum webhook ignored (sender is master wallet)', ['txId' => $txId]);
+
+            return;
         }
 
         $webhookAddrLower = strtolower((string) $webhookAddress);
@@ -118,27 +158,19 @@ class ProcessTatumWebhookJob implements ShouldQueue
         $userId = $depositRow->virtualAccount->user_id;
 
         $contractAddress = $data['contractAddress'] ?? $data['asset'] ?? null;
-        $isFungible = $subscriptionType === 'INCOMING_FUNGIBLE_TX' && is_string($contractAddress) && $contractAddress !== ''
-            && strtoupper($contractAddress) !== 'ETH';
+        $isIncomingFungible = $subscriptionType === 'INCOMING_FUNGIBLE_TX';
 
         $virtualAccount = $depositRow->virtualAccount;
         $detectedCurrency = $virtualAccount->currency;
 
-        if ($isFungible && is_string($contractAddress)) {
-            $walletCurrency = WalletCurrency::query()
-                ->whereRaw('LOWER(blockchain) = ?', [strtolower($baseBlockchain)])
-                ->whereNotNull('contract_address')
-                ->get()
-                ->first(function (WalletCurrency $wc) use ($contractAddress) {
-                    return strcasecmp((string) $wc->contract_address, $contractAddress) === 0;
-                });
-
-            if ($walletCurrency) {
-                $detectedCurrency = $walletCurrency->currency;
+        if ($isIncomingFungible) {
+            $wcMatch = $this->resolveFungibleWalletCurrency($baseBlockchain, $contractAddress, $data);
+            if ($wcMatch) {
+                $detectedCurrency = $wcMatch->currency;
                 $betterVa = VirtualAccount::query()
                     ->where('user_id', $userId)
-                    ->where('currency', $walletCurrency->currency)
-                    ->whereRaw('LOWER(blockchain) = ?', [strtolower($walletCurrency->blockchain)])
+                    ->where('currency', $wcMatch->currency)
+                    ->whereRaw('LOWER(blockchain) = ?', [strtolower($wcMatch->blockchain)])
                     ->where('active', true)
                     ->first();
                 if ($betterVa) {
@@ -171,10 +203,10 @@ class ProcessTatumWebhookJob implements ShouldQueue
                 'tx_id' => $txId,
                 'block_height' => isset($data['blockNumber']) ? (int) $data['blockNumber'] : (isset($data['blockHeight']) ? (int) $data['blockHeight'] : null),
                 'block_hash' => isset($data['blockHash']) ? (string) $data['blockHash'] : null,
-                'from_address' => is_string($counterAddress) ? $counterAddress : null,
+                'from_address' => $counterparty,
                 'to_address' => (string) $webhookAddress,
                 'transaction_date' => $transactionDate,
-                'index' => isset($data['logIndex']) ? (int) $data['logIndex'] : null,
+                'index' => isset($data['logIndex']) ? (int) $data['logIndex'] : (isset($data['index']) ? (int) $data['index'] : null),
             ]);
         } catch (\Illuminate\Database\QueryException $e) {
             $msg = strtolower($e->getMessage());
@@ -198,10 +230,160 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $amount,
             $txId,
             $subscriptionType,
-            is_string($counterAddress) ? $counterAddress : '',
+            $counterparty,
             (string) $webhookAddress,
             $baseBlockchain
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<int, string>  $masterAddressesLower
+     */
+    protected function processAccountIdIncoming(
+        array $data,
+        VirtualAccount $va,
+        string $subscriptionType,
+        string $txId,
+        array $masterAddressesLower
+    ): void {
+        $from = $this->resolveCounterpartyAddress($data);
+        if ($from && $this->isMasterAddress($from, $masterAddressesLower)) {
+            Log::info('Tatum webhook ignored (accountId path, sender is master)', ['txId' => $txId]);
+
+            return;
+        }
+
+        $amountStr = (string) ($data['amount'] ?? '0');
+        $amount = (float) $amountStr;
+        if ($amount <= 0) {
+            return;
+        }
+
+        $currency = $va->currency;
+        $baseBlockchain = DepositAddressService::normalizeBlockchain((string) $va->blockchain);
+
+        try {
+            TatumWebhookResponse::query()->create([
+                'account_id' => $va->account_id,
+                'subscription_type' => $subscriptionType ?: 'ACCOUNT_INCOMING',
+                'amount' => is_numeric($amountStr) ? $amountStr : 0,
+                'reference' => isset($data['reference']) ? (string) $data['reference'] : null,
+                'currency' => $currency,
+                'tx_id' => $txId,
+                'block_height' => isset($data['blockNumber']) ? (int) $data['blockNumber'] : (isset($data['blockHeight']) ? (int) $data['blockHeight'] : null),
+                'block_hash' => isset($data['blockHash']) ? (string) $data['blockHash'] : null,
+                'from_address' => $from,
+                'to_address' => (string) ($data['address'] ?? $data['to'] ?? ''),
+                'transaction_date' => now(),
+                'index' => isset($data['logIndex']) ? (int) $data['logIndex'] : null,
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            $msg = strtolower($e->getMessage());
+            if (str_contains($msg, 'unique') || str_contains($msg, 'duplicate')) {
+                return;
+            }
+            throw $e;
+        }
+
+        $this->creditVirtualAccountAndLedger(
+            $va,
+            $va->user_id,
+            $currency,
+            $amount,
+            $txId,
+            $subscriptionType,
+            (string) $from,
+            (string) ($data['address'] ?? $data['to'] ?? ''),
+            $baseBlockchain
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected function resolveCounterpartyAddress(array $data): ?string
+    {
+        $candidates = [
+            $data['counterAddress'] ?? null,
+            $data['counter_address'] ?? null,
+            $data['from'] ?? null,
+        ];
+        if (! empty($data['counterAddresses']) && is_array($data['counterAddresses'])) {
+            foreach ($data['counterAddresses'] as $item) {
+                if (is_string($item) && $item !== '') {
+                    $candidates[] = $item;
+                }
+                if (is_array($item) && isset($item['address']) && is_string($item['address'])) {
+                    $candidates[] = $item['address'];
+                }
+            }
+        }
+        foreach ($candidates as $c) {
+            if (is_string($c) && trim($c) !== '') {
+                return $c;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<int, string>  $masterAddressesLower
+     */
+    protected function isMasterAddress(string $address, array $masterAddressesLower): bool
+    {
+        $lower = strtolower(trim($address));
+
+        return in_array($lower, $masterAddressesLower, true);
+    }
+
+    /**
+     * @param  mixed  $contractAddress
+     * @param  array<string, mixed>  $data
+     */
+    protected function resolveFungibleWalletCurrency(string $baseBlockchain, $contractAddress, array $data): ?WalletCurrency
+    {
+        $chainLower = strtolower($baseBlockchain);
+
+        if (is_string($contractAddress) && trim($contractAddress) !== '' && strtoupper($contractAddress) !== 'ETH') {
+            $contract = trim($contractAddress);
+            $wc = WalletCurrency::query()
+                ->whereRaw('LOWER(blockchain) = ?', [$chainLower])
+                ->whereNotNull('contract_address')
+                ->get()
+                ->first(function (WalletCurrency $w) use ($contract) {
+                    return strcasecmp((string) $w->contract_address, $contract) === 0;
+                });
+            if ($wc) {
+                return $wc;
+            }
+        }
+
+        $symbolHints = array_filter([
+            is_string($contractAddress) ? $contractAddress : null,
+            $data['currency'] ?? null,
+            $data['symbol'] ?? null,
+        ], fn ($v) => is_string($v) && $v !== '');
+
+        foreach ($symbolHints as $hint) {
+            $u = strtoupper(str_replace([' ', '-'], '_', (string) $hint));
+            if ($u === 'USDT_TRON' || ($chainLower === 'tron' && str_contains($u, 'USDT'))) {
+                $tronUsdt = config('tatum.contracts.tron.USDT');
+                if ($tronUsdt) {
+                    $wc = WalletCurrency::query()
+                        ->whereRaw('LOWER(blockchain) = ?', ['tron'])
+                        ->where('currency', 'USDT')
+                        ->whereNotNull('contract_address')
+                        ->first();
+                    if ($wc) {
+                        return $wc;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     protected function creditVirtualAccountAndLedger(
@@ -243,9 +425,10 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $walletCurrency = WalletCurrency::query()
                 ->where('currency', $currency)
                 ->whereRaw('LOWER(blockchain) = ?', [strtolower($account->blockchain)])
+                ->with('exchangeRate')
                 ->first();
 
-            $rate = $walletCurrency ? (float) ($walletCurrency->rate ?? 0) : 1.0;
+            $rate = $walletCurrency ? $walletCurrency->usdPerUnitForDisplay() : 1.0;
             $amountUsd = $amount * $rate;
             $amountNgn = $amountUsd * (float) config('crypto.ngn_per_usd', CryptoService::DEFAULT_EXCHANGE_RATE);
 
@@ -268,6 +451,7 @@ class ProcessTatumWebhookJob implements ShouldQueue
                     'from_address' => $fromAddress,
                     'to_address' => $toAddress,
                     'subscription_type' => $subscriptionType,
+                    'virtual_account_id' => $account->id,
                     'amount_usd' => round($amountUsd, 8),
                     'amount_ngn' => round($amountNgn, 2),
                 ],

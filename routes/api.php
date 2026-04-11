@@ -8,6 +8,8 @@ use App\Http\Controllers\Api\AdminCryptoVendorController;
 use App\Http\Controllers\Api\AdminDepositController;
 use App\Http\Controllers\Api\AdminFiatWalletController;
 use App\Http\Controllers\Api\AdminKycController;
+use App\Http\Controllers\Api\AdminMasterWalletController;
+use App\Http\Controllers\Api\AdminPlatformRateController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
 use App\Http\Controllers\Api\AdminTransactionController;
@@ -15,6 +17,7 @@ use App\Http\Controllers\Api\AdminUserController;
 use App\Http\Controllers\Api\AdminVirtualAccountController;
 use App\Http\Controllers\Api\AdminVirtualCardController;
 use App\Http\Controllers\Api\AdminWalletCurrencyController;
+use App\Http\Controllers\Api\AdminWalletUsersController;
 use App\Http\Controllers\Api\AdminWebhookController;
 use App\Http\Controllers\Api\AdminWithdrawalController;
 use App\Http\Controllers\Api\AuthController;
@@ -203,6 +206,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     Route::middleware(['admin'])->prefix('admin')->group(function () {
         Route::get('/stats', [AdminStatsController::class, 'index']);
 
+        Route::get('/wallet-users', [AdminWalletUsersController::class, 'index']);
+        Route::get('/wallet-users/totals', [AdminWalletUsersController::class, 'totals']);
+
         Route::get('/users', [AdminUserController::class, 'index']);
         Route::get('/users/{user}', [AdminUserController::class, 'show']);
         Route::patch('/users/{user}', [AdminUserController::class, 'update']);
@@ -234,13 +240,35 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::post('/kyc/{user}/approve', [AdminKycController::class, 'approve']);
         Route::post('/kyc/{user}/reject', [AdminKycController::class, 'reject']);
 
+        Route::get('/bill-payments/summary', [AdminBillPaymentController::class, 'summary']);
         Route::get('/bill-payments', [AdminBillPaymentController::class, 'index']);
+        Route::get('/bill-payments/{id}', [AdminBillPaymentController::class, 'show']);
+
+        Route::get('/master-wallet/summary', [AdminMasterWalletController::class, 'summary']);
+        Route::get('/master-wallet/transactions', [AdminMasterWalletController::class, 'transactions']);
+
+        Route::get('/platform-rates/meta', [AdminPlatformRateController::class, 'meta']);
+        Route::get('/platform-rates', [AdminPlatformRateController::class, 'index']);
+        Route::post('/platform-rates', [AdminPlatformRateController::class, 'store']);
+        Route::put('/platform-rates/{platformRate}', [AdminPlatformRateController::class, 'update']);
+        Route::delete('/platform-rates/{platformRate}', [AdminPlatformRateController::class, 'destroy']);
+        Route::post('/platform-rates/bulk-delete', [AdminPlatformRateController::class, 'bulkDestroy']);
+
+        Route::get('/users/{user}/virtual-cards', [AdminVirtualCardController::class, 'forUser']);
+        Route::get('/users/{user}/virtual-card-transactions', [AdminVirtualCardController::class, 'transactionsForUser']);
+
+        Route::get('/virtual-cards/summary', [AdminVirtualCardController::class, 'summary']);
+        Route::get('/virtual-cards/users-overview', [AdminVirtualCardController::class, 'usersOverview']);
 
         Route::get('/virtual-cards', [AdminVirtualCardController::class, 'index']);
         Route::get('/virtual-cards/{id}', [AdminVirtualCardController::class, 'show']);
         Route::post('/virtual-cards/{id}/freeze', [AdminVirtualCardController::class, 'freeze']);
+        Route::post('/virtual-cards/{id}/unfreeze', [AdminVirtualCardController::class, 'unfreeze']);
 
+        Route::get('/support/tickets/summary', [AdminSupportTicketController::class, 'summary']);
         Route::get('/support/tickets', [AdminSupportTicketController::class, 'index']);
+        Route::get('/support/tickets/{supportTicket}', [AdminSupportTicketController::class, 'show']);
+        Route::post('/support/tickets/{supportTicket}/messages', [AdminSupportTicketController::class, 'storeMessage']);
         Route::patch('/support/tickets/{supportTicket}', [AdminSupportTicketController::class, 'update']);
 
         Route::prefix('webhooks')->group(function () {

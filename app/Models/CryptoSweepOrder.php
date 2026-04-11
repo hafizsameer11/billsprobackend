@@ -9,6 +9,8 @@ class CryptoSweepOrder extends Model
 {
     protected $fillable = [
         'crypto_vendor_id',
+        'sweep_target',
+        'master_wallet_id',
         'virtual_account_id',
         'user_id',
         'admin_user_id',
@@ -49,5 +51,10 @@ class CryptoSweepOrder extends Model
     public function admin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'admin_user_id');
+    }
+
+    public function masterWallet(): BelongsTo
+    {
+        return $this->belongsTo(MasterWallet::class);
     }
 }
