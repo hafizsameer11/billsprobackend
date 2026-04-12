@@ -24,6 +24,7 @@ class AdminUserController extends Controller
             'search' => $request->query('search'),
             'account_status' => $request->query('account_status'),
             'is_admin' => $request->query('is_admin'),
+            'kyc_filter' => $request->query('kyc_filter'),
         ];
 
         return ResponseHelper::success(

@@ -33,6 +33,19 @@ class AdminTransactionController extends Controller
         if ($request->filled('to')) {
             $q->where('created_at', '<=', $request->query('to'));
         }
+        if ($request->filled('search')) {
+            $s = '%'.trim((string) $request->query('search')).'%';
+            $q->where(function ($w) use ($s) {
+                $w->where('transaction_id', 'like', $s)
+                    ->orWhere('reference', 'like', $s)
+                    ->orWhere('description', 'like', $s)
+                    ->orWhereHas('user', function ($u) use ($s) {
+                        $u->where('name', 'like', $s)
+                            ->orWhere('email', 'like', $s)
+                            ->orWhere('phone_number', 'like', $s);
+                    });
+            });
+        }
 
         return ResponseHelper::success($q->paginate($perPage), 'Transactions retrieved.');
     }

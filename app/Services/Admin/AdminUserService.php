@@ -34,6 +34,16 @@ class AdminUserService
             $q->where('is_admin', filter_var($filters['is_admin'], FILTER_VALIDATE_BOOL));
         }
 
+        if (! empty($filters['kyc_filter']) && in_array($filters['kyc_filter'], ['verified', 'pending'], true)) {
+            if ($filters['kyc_filter'] === 'verified') {
+                $q->where('kyc_completed', true);
+            } else {
+                $q->whereHas('kyc', function ($k) {
+                    $k->where('status', 'pending');
+                });
+            }
+        }
+
         return $q->paginate($perPage);
     }
 
