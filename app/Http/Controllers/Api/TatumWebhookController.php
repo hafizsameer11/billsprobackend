@@ -16,16 +16,8 @@ class TatumWebhookController extends Controller
      */
     public function replay(Request $request, int $id): JsonResponse
     {
-        $expected = (string) config('tatum.raw_replay_token', '');
-        if ($expected === '') {
-            return response()->json([
-                'message' => 'Replay disabled (set TATUM_RAW_REPLAY_TOKEN).',
-            ], 403);
-        }
-
-        $given = (string) $request->query('token', '');
-        if (! hash_equals($expected, $given)) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if ($deny = $this->replayForbiddenResponse($request)) {
+            return $deny;
         }
 
         $raw = TatumRawWebhook::query()->find($id);
@@ -39,6 +31,53 @@ class TatumWebhookController extends Controller
             'message' => 'Replay queued',
             'tatum_raw_webhook_id' => $raw->id,
         ], 200);
+    }
+
+    /**
+     * Queue ProcessTatumWebhookJob for every row with processed=false (oldest first).
+     * Same token as single replay. Optional query: limit (default 200, max 500).
+     */
+    public function replayPending(Request $request): JsonResponse
+    {
+        if ($deny = $this->replayForbiddenResponse($request)) {
+            return $deny;
+        }
+
+        $limit = min(500, max(1, (int) $request->query('limit', 200)));
+
+        $ids = TatumRawWebhook::query()
+            ->where('processed', false)
+            ->orderBy('id')
+            ->limit($limit)
+            ->pluck('id');
+
+        foreach ($ids as $rawId) {
+            ProcessTatumWebhookJob::dispatch($rawId);
+        }
+
+        return response()->json([
+            'message' => 'Replay queued for pending raw webhooks',
+            'count' => $ids->count(),
+            'limit' => $limit,
+            'tatum_raw_webhook_ids' => $ids->values()->all(),
+        ], 200);
+    }
+
+    private function replayForbiddenResponse(Request $request): ?JsonResponse
+    {
+        $expected = (string) config('tatum.raw_replay_token', '');
+        if ($expected === '') {
+            return response()->json([
+                'message' => 'Replay disabled (set TATUM_RAW_REPLAY_TOKEN).',
+            ], 403);
+        }
+
+        $given = (string) $request->query('token', '');
+        if (! hash_equals($expected, $given)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        return null;
     }
 
     public function handle(Request $request): JsonResponse

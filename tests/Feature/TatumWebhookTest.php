@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProcessTatumWebhookJob;
 use App\Models\CryptoDepositAddress;
 use App\Models\MasterWallet;
 use App\Models\TatumRawWebhook;
@@ -10,6 +11,7 @@ use App\Models\User;
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class TatumWebhookTest extends TestCase
@@ -251,5 +253,30 @@ class TatumWebhookTest extends TestCase
 
         $this->getJson('/api/webhooks/tatum/replay/1?token=wrong')->assertStatus(403);
         $this->getJson('/api/webhooks/tatum/replay/1')->assertStatus(403);
+    }
+
+    public function test_tatum_replay_pending_queues_unprocessed_only(): void
+    {
+        Queue::fake();
+        config(['tatum.raw_replay_token' => 'secret-replay']);
+
+        TatumRawWebhook::query()->create([
+            'raw_data' => '{"txId":"0xreplaypendinga"}',
+            'processed' => false,
+        ]);
+        TatumRawWebhook::query()->create([
+            'raw_data' => '{"txId":"0xreplaypendingb"}',
+            'processed' => false,
+        ]);
+        TatumRawWebhook::query()->create([
+            'raw_data' => '{}',
+            'processed' => true,
+        ]);
+
+        $this->getJson('/api/webhooks/tatum/replay-pending?token=secret-replay')
+            ->assertOk()
+            ->assertJsonPath('count', 2);
+
+        Queue::assertPushed(ProcessTatumWebhookJob::class, 2);
     }
 }
