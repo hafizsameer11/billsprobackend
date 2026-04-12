@@ -17,6 +17,8 @@ class DepositAddressService
     protected const BLOCKCHAIN_NORMALIZATION = [
         'ethereum' => 'ethereum',
         'eth' => 'ethereum',
+        'ethereum-mainnet' => 'ethereum',
+        'eth-mainnet' => 'ethereum',
         'erc20' => 'ethereum',
         'tron' => 'tron',
         'trx' => 'tron',

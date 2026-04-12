@@ -10,6 +10,37 @@ use Illuminate\Http\Request;
 
 class TatumWebhookController extends Controller
 {
+    /**
+     * Re-queue processing for a stored raw webhook (e.g. after fixing payload handling or setting processed=0).
+     * Requires config tatum.raw_replay_token and matching ?token= query param.
+     */
+    public function replay(Request $request, int $id): JsonResponse
+    {
+        $expected = (string) config('tatum.raw_replay_token', '');
+        if ($expected === '') {
+            return response()->json([
+                'message' => 'Replay disabled (set TATUM_RAW_REPLAY_TOKEN).',
+            ], 403);
+        }
+
+        $given = (string) $request->query('token', '');
+        if (! hash_equals($expected, $given)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $raw = TatumRawWebhook::query()->find($id);
+        if (! $raw) {
+            return response()->json(['message' => 'Raw webhook not found'], 404);
+        }
+
+        ProcessTatumWebhookJob::dispatch($raw->id);
+
+        return response()->json([
+            'message' => 'Replay queued',
+            'tatum_raw_webhook_id' => $raw->id,
+        ], 200);
+    }
+
     public function handle(Request $request): JsonResponse
     {
         try {

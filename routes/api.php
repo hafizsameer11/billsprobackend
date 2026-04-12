@@ -72,6 +72,7 @@ Route::post('/webhooks/palmpay/bill-payment', [PalmPayWebhookController::class, 
 Route::post('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::get('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::post('/webhooks/tatum', [TatumWebhookController::class, 'handle']);
+Route::get('/webhooks/tatum/replay/{id}', [TatumWebhookController::class, 'replay']);
 
 // ============================================================================
 // PROTECTED ROUTES - Require Authentication
