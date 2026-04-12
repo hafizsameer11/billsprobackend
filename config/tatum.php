@@ -22,12 +22,6 @@ return [
     'webhook_url' => env('TATUM_WEBHOOK_URL', rtrim((string) env('APP_URL', ''), '/').'/api/webhooks/tatum'),
 
     /**
-     * Optional secret for GET /api/webhooks/tatum/replay/{id}?token=...
-     * (re-dispatch ProcessTatumWebhookJob for a stored tatum_raw_webhooks row). Empty = disabled.
-     */
-    'raw_replay_token' => env('TATUM_RAW_REPLAY_TOKEN', ''),
-
-    /**
      * When true, deposit addresses fall back to local mock strings (no Tatum calls).
      */
     'use_mock' => filter_var(env('TATUM_USE_MOCK', false), FILTER_VALIDATE_BOOL),

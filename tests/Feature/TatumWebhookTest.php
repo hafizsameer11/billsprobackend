@@ -247,18 +247,14 @@ class TatumWebhookTest extends TestCase
         ]);
     }
 
-    public function test_tatum_replay_get_requires_token(): void
+    public function test_tatum_replay_get_returns_404_when_missing_row(): void
     {
-        config(['tatum.raw_replay_token' => 'secret-replay']);
-
-        $this->getJson('/api/webhooks/tatum/replay/1?token=wrong')->assertStatus(403);
-        $this->getJson('/api/webhooks/tatum/replay/1')->assertStatus(403);
+        $this->getJson('/api/webhooks/tatum/replay/999999')->assertStatus(404);
     }
 
     public function test_tatum_replay_pending_queues_unprocessed_only(): void
     {
         Queue::fake();
-        config(['tatum.raw_replay_token' => 'secret-replay']);
 
         TatumRawWebhook::query()->create([
             'raw_data' => '{"txId":"0xreplaypendinga"}',
@@ -273,7 +269,7 @@ class TatumWebhookTest extends TestCase
             'processed' => true,
         ]);
 
-        $this->getJson('/api/webhooks/tatum/replay-pending?token=secret-replay')
+        $this->getJson('/api/webhooks/tatum/replay-pending')
             ->assertOk()
             ->assertJsonPath('count', 2);
 
