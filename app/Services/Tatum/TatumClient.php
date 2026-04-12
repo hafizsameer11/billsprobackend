@@ -53,7 +53,8 @@ class TatumClient
     public function generateAddress(string $blockchain, string $xpub, int $index): string
     {
         $normalized = strtolower($blockchain);
-        $data = $this->getJsonV3('/'.$normalized.'/address/'.$xpub.'/'.$index);
+        $xpubSegment = rawurlencode($xpub);
+        $data = $this->getJsonV3('/'.$normalized.'/address/'.$xpubSegment.'/'.$index);
 
         return (string) ($data['address'] ?? '');
     }

@@ -61,9 +61,19 @@ class MasterWalletGeneratorService
         $tatum = TatumClient::fromConfig();
         $data = $tatum->createWallet($tatumPath);
 
+        // HD chains: Tatum `GET /v3/{chain}/wallet` often returns mnemonic + xpub only; address is then
+        // `GET /v3/{chain}/address/{xpub}/0`. Non-HD (e.g. Solana): response includes `address` + `privateKey`
+        // directly; XRP uses `GET /v3/xrp/account` (handled in TatumClient) — do not derive via xpub.
         $address = (string) ($data['address'] ?? '');
+        $xpub = isset($data['xpub']) ? (string) $data['xpub'] : null;
+        if ($address === '' && $xpub !== null && $xpub !== '' && $this->shouldDeriveAddressFromXpub($tatumPath)) {
+            $address = $tatum->generateAddress($tatumPath, $xpub, 0);
+        }
         if ($address === '') {
-            throw new RuntimeException('Tatum did not return an address for '.$tatumPath);
+            throw new RuntimeException(
+                'Tatum did not return an address for '.$tatumPath
+                .' (expected `address` on wallet response, or `xpub` for HD derivation at index 0).'
+            );
         }
 
         $privateKey = $this->resolvePrivateKey($tatum, $tatumPath, $data);
@@ -71,7 +81,6 @@ class MasterWalletGeneratorService
             throw new RuntimeException('Resolved empty private key for '.$tatumPath);
         }
         $mnemonic = $data['mnemonic'] ?? null;
-        $xpub = $data['xpub'] ?? null;
 
         return DB::transaction(function () use ($normalized, $address, $privateKey, $mnemonic, $xpub, $label) {
             $wallet = MasterWallet::create([
@@ -89,6 +98,18 @@ class MasterWalletGeneratorService
 
             return $wallet->load('secret');
         });
+    }
+
+    /**
+     * Chains where Tatum follows BIP44-style HD: wallet returns xpub + mnemonic, address at index 0 via
+     * `/v3/{chain}/address/{xpub}/0`. Solana (and similar) return address + privateKey in one response — no xpub path.
+     */
+    protected function shouldDeriveAddressFromXpub(string $tatumPath): bool
+    {
+        return match (strtolower($tatumPath)) {
+            'solana' => false,
+            default => true,
+        };
     }
 
     /**
