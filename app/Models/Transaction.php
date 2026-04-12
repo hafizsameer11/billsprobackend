@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Transaction extends Model
 {
@@ -43,6 +44,14 @@ class Transaction extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Custody record for on-chain crypto credits (when present).
+     */
+    public function receivedAsset(): HasOne
+    {
+        return $this->hasOne(ReceivedAsset::class);
     }
 
     /**

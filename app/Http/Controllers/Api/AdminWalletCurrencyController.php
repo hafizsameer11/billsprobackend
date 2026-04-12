@@ -12,6 +12,27 @@ use Illuminate\Http\Request;
 class AdminWalletCurrencyController extends Controller
 {
     /**
+     * List wallet currencies (for vendor linking, filters, admin forms).
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $activeOnly = filter_var($request->query('active_only', true), FILTER_VALIDATE_BOOL);
+        $q = WalletCurrency::query()
+            ->select([
+                'id', 'blockchain', 'currency', 'symbol', 'name',
+                'contract_address', 'decimals', 'is_token', 'is_active',
+            ])
+            ->orderBy('blockchain')
+            ->orderBy('currency');
+
+        if ($activeOnly) {
+            $q->where('is_active', true);
+        }
+
+        return ResponseHelper::success($q->get(), 'Wallet currencies retrieved.');
+    }
+
+    /**
      * Update reference `rate` on wallet_currency and buy/sell on `crypto_exchange_rates`.
      */
     public function updateRate(Request $request, int $id): JsonResponse

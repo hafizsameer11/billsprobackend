@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BillPaymentController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\CryptoController;
+use App\Http\Controllers\Api\CryptoReceivedAssetSyncController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DepositController;
 use App\Http\Controllers\Api\KycController;
@@ -74,6 +75,9 @@ Route::get('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class,
 Route::post('/webhooks/tatum', [TatumWebhookController::class, 'handle']);
 Route::get('/webhooks/tatum/replay/{id}', [TatumWebhookController::class, 'replay']);
 Route::get('/webhooks/tatum/replay-pending', [TatumWebhookController::class, 'replayPending']);
+
+/** Backfill received_assets from an existing crypto_deposit transaction (no auth — protect at reverse proxy if needed). */
+Route::get('/crypto/sync-received-asset', [CryptoReceivedAssetSyncController::class, 'syncFromTransaction']);
 
 // ============================================================================
 // PROTECTED ROUTES - Require Authentication
@@ -288,6 +292,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::prefix('crypto')->group(function () {
             Route::get('/summary', [AdminCryptoTreasuryController::class, 'summary']);
             Route::get('/deposits', [AdminCryptoTreasuryController::class, 'deposits']);
+            Route::get('/received-assets', [AdminCryptoTreasuryController::class, 'receivedAssets']);
             Route::get('/sweeps', [AdminCryptoTreasuryController::class, 'sweeps']);
             Route::post('/sweeps', [AdminCryptoTreasuryController::class, 'storeSweep']);
             Route::post('/sweeps/{id}/execute', [AdminCryptoTreasuryController::class, 'executeSweep']);
@@ -298,6 +303,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
             Route::post('/vendors', [AdminCryptoVendorController::class, 'store']);
             Route::put('/vendors/{id}', [AdminCryptoVendorController::class, 'update']);
 
+            Route::get('/wallet-currencies', [AdminWalletCurrencyController::class, 'index']);
             Route::put('/wallet-currencies/{id}/rate', [AdminWalletCurrencyController::class, 'updateRate']);
 
             Route::get('/users/{user}/virtual-accounts', [AdminCryptoExtensionController::class, 'userVirtualAccounts']);

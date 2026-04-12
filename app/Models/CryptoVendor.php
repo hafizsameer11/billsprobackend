@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CryptoVendor extends Model
@@ -12,6 +13,7 @@ class CryptoVendor extends Model
         'code',
         'blockchain',
         'currency',
+        'wallet_currency_id',
         'payout_address',
         'contract_address',
         'is_active',
@@ -24,6 +26,11 @@ class CryptoVendor extends Model
             'is_active' => 'boolean',
             'metadata' => 'array',
         ];
+    }
+
+    public function walletCurrency(): BelongsTo
+    {
+        return $this->belongsTo(WalletCurrency::class);
     }
 
     public function sweepOrders(): HasMany

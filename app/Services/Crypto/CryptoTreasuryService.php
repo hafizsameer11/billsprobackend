@@ -7,6 +7,7 @@ use App\Models\CryptoSweepOrder;
 use App\Models\CryptoVendor;
 use App\Models\MasterWallet;
 use App\Models\MasterWalletTransaction;
+use App\Models\ReceivedAsset;
 use App\Models\Transaction;
 use App\Models\VirtualAccount;
 use App\Services\Tatum\DepositAddressService;
@@ -90,6 +91,48 @@ class CryptoTreasuryService
     }
 
     /**
+     * Custody ledger: one row per on-chain credit (parallel to user `transactions` rows).
+     */
+    public function paginateReceivedAssets(int $perPage, ?Request $request = null): LengthAwarePaginator
+    {
+        $q = ReceivedAsset::query()
+            ->with([
+                'user:id,name,email,phone_number',
+                'virtualAccount:id,user_id,currency,blockchain,account_id',
+                'transaction:id,transaction_id,type,amount,currency,status',
+                'cryptoDepositAddress:id,address,blockchain,currency',
+            ])
+            ->orderByDesc('created_at');
+
+        if ($request) {
+            if ($request->filled('user_id')) {
+                $q->where('user_id', (int) $request->query('user_id'));
+            }
+            if ($request->filled('currency')) {
+                $q->where('currency', strtoupper((string) $request->query('currency')));
+            }
+            if ($request->filled('blockchain')) {
+                $q->whereRaw('LOWER(blockchain) = ?', [strtolower((string) $request->query('blockchain'))]);
+            }
+            if ($request->filled('tx_hash')) {
+                $h = (string) $request->query('tx_hash');
+                $q->where('tx_hash', 'like', '%'.$h.'%');
+            }
+            if ($request->filled('status')) {
+                $q->where('status', (string) $request->query('status'));
+            }
+            if ($request->filled('date_from')) {
+                $q->where('created_at', '>=', $request->query('date_from'));
+            }
+            if ($request->filled('date_to')) {
+                $q->where('created_at', '<=', $request->query('date_to'));
+            }
+        }
+
+        return $q->paginate($perPage);
+    }
+
+    /**
      * @return Collection<int, CryptoVendor>
      */
     public function listVendors(bool $activeOnly = true): Collection
@@ -99,7 +142,7 @@ class CryptoTreasuryService
             $q->where('is_active', true);
         }
 
-        return $q->get();
+        return $q->with('walletCurrency')->get();
     }
 
     public function createVendor(array $data): CryptoVendor
@@ -109,6 +152,7 @@ class CryptoTreasuryService
             'code' => strtolower($data['code']),
             'blockchain' => $data['blockchain'],
             'currency' => strtoupper($data['currency']),
+            'wallet_currency_id' => $data['wallet_currency_id'] ?? null,
             'payout_address' => $data['payout_address'],
             'contract_address' => $data['contract_address'] ?? null,
             'is_active' => $data['is_active'] ?? true,
@@ -118,16 +162,23 @@ class CryptoTreasuryService
 
     public function updateVendor(CryptoVendor $vendor, array $data): CryptoVendor
     {
-        $vendor->update(array_filter([
-            'name' => $data['name'] ?? null,
-            'code' => isset($data['code']) ? strtolower((string) $data['code']) : null,
-            'blockchain' => $data['blockchain'] ?? null,
-            'currency' => isset($data['currency']) ? strtoupper((string) $data['currency']) : null,
-            'payout_address' => $data['payout_address'] ?? null,
-            'contract_address' => $data['contract_address'] ?? null,
-            'is_active' => $data['is_active'] ?? null,
-            'metadata' => $data['metadata'] ?? null,
-        ], fn ($v) => $v !== null));
+        $patch = [];
+        foreach (['name', 'code', 'blockchain', 'currency', 'wallet_currency_id', 'payout_address', 'contract_address', 'is_active', 'metadata'] as $key) {
+            if (! array_key_exists($key, $data)) {
+                continue;
+            }
+            $val = $data[$key];
+            if ($key === 'code' && is_string($val)) {
+                $val = strtolower($val);
+            }
+            if ($key === 'currency' && is_string($val)) {
+                $val = strtoupper($val);
+            }
+            $patch[$key] = $val;
+        }
+        if ($patch !== []) {
+            $vendor->update($patch);
+        }
 
         return $vendor->fresh();
     }

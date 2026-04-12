@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Models\CryptoSweepOrder;
+use App\Models\Transaction;
+use App\Models\VirtualAccount;
 use App\Services\Crypto\CryptoTreasuryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,15 +33,50 @@ class AdminCryptoTreasuryController extends Controller
     {
         try {
             $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
+            $paginator = $this->treasury->paginateDeposits($perPage, $request);
 
-            return ResponseHelper::success(
-                $this->treasury->paginateDeposits($perPage, $request),
-                'Deposits retrieved.'
-            );
+            $paginator->getCollection()->transform(function (Transaction $t) {
+                $vaId = data_get($t->metadata, 'virtual_account_id');
+                if ($vaId) {
+                    $va = VirtualAccount::query()
+                        ->select(['id', 'available_balance', 'account_balance', 'account_id', 'currency', 'blockchain', 'user_id'])
+                        ->find((int) $vaId);
+                    $t->setAttribute('virtual_account_hint', $va ? [
+                        'id' => $va->id,
+                        'account_id' => $va->account_id,
+                        'available_balance' => (string) $va->available_balance,
+                        'currency' => $va->currency,
+                        'blockchain' => $va->blockchain,
+                        'user_id' => $va->user_id,
+                    ] : null);
+                } else {
+                    $t->setAttribute('virtual_account_hint', null);
+                }
+
+                return $t;
+            });
+
+            return ResponseHelper::success($paginator, 'Deposits retrieved.');
         } catch (\Throwable $e) {
             Log::error('Admin crypto deposits failed', ['e' => $e->getMessage()]);
 
             return ResponseHelper::serverError('Could not load deposits.');
+        }
+    }
+
+    public function receivedAssets(Request $request): JsonResponse
+    {
+        try {
+            $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
+
+            return ResponseHelper::success(
+                $this->treasury->paginateReceivedAssets($perPage, $request),
+                'Received assets retrieved.'
+            );
+        } catch (\Throwable $e) {
+            Log::error('Admin received assets failed', ['e' => $e->getMessage()]);
+
+            return ResponseHelper::serverError('Could not load received assets.');
         }
     }
 

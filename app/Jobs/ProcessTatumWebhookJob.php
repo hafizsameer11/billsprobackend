@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\CryptoDepositAddress;
 use App\Models\MasterWallet;
+use App\Models\ReceivedAsset;
 use App\Models\TatumRawWebhook;
 use App\Models\TatumWebhookResponse;
 use App\Models\Transaction;
@@ -246,7 +247,8 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $subscriptionType,
             $counterparty,
             (string) $webhookAddress,
-            $baseBlockchain
+            $baseBlockchain,
+            $this->logIndexFromPayload($data)
         );
     }
 
@@ -317,8 +319,24 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $subscriptionType,
             (string) $from,
             (string) ($data['address'] ?? $data['to'] ?? ''),
-            $baseBlockchain
+            $baseBlockchain,
+            $this->logIndexFromPayload($data)
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected function logIndexFromPayload(array $data): int
+    {
+        if (isset($data['logIndex']) && is_numeric($data['logIndex'])) {
+            return (int) $data['logIndex'];
+        }
+        if (isset($data['index']) && is_numeric($data['index'])) {
+            return (int) $data['index'];
+        }
+
+        return 0;
     }
 
     /**
@@ -535,7 +553,8 @@ class ProcessTatumWebhookJob implements ShouldQueue
         string $subscriptionType,
         string $fromAddress,
         string $toAddress,
-        string $baseBlockchain
+        string $baseBlockchain,
+        int $logIndex = 0
     ): void {
         DB::transaction(function () use (
             $virtualAccount,
@@ -546,7 +565,8 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $subscriptionType,
             $fromAddress,
             $toAddress,
-            $baseBlockchain
+            $baseBlockchain,
+            $logIndex
         ) {
             $account = VirtualAccount::query()
                 ->whereKey($virtualAccount->id)
@@ -572,7 +592,7 @@ class ProcessTatumWebhookJob implements ShouldQueue
             $amountUsd = $amount * $rate;
             $amountNgn = $amountUsd * (float) config('crypto.ngn_per_usd', CryptoService::DEFAULT_EXCHANGE_RATE);
 
-            Transaction::query()->create([
+            $tx = Transaction::query()->create([
                 'user_id' => $userId,
                 'transaction_id' => Transaction::generateTransactionId(),
                 'type' => 'crypto_deposit',
@@ -594,8 +614,40 @@ class ProcessTatumWebhookJob implements ShouldQueue
                     'virtual_account_id' => $account->id,
                     'amount_usd' => round($amountUsd, 8),
                     'amount_ngn' => round($amountNgn, 2),
+                    'received_asset_log_index' => $logIndex,
                 ],
                 'completed_at' => now(),
+            ]);
+
+            $depositAddr = CryptoDepositAddress::query()
+                ->where('virtual_account_id', $account->id)
+                ->whereRaw('LOWER(TRIM(address)) = ?', [strtolower(trim($toAddress))])
+                ->first();
+            if (! $depositAddr) {
+                $depositAddr = CryptoDepositAddress::query()
+                    ->where('virtual_account_id', $account->id)
+                    ->orderByDesc('id')
+                    ->first();
+            }
+
+            ReceivedAsset::query()->create([
+                'user_id' => $userId,
+                'virtual_account_id' => $account->id,
+                'transaction_id' => $tx->id,
+                'crypto_deposit_address_id' => $depositAddr?->id,
+                'blockchain' => (string) $account->blockchain,
+                'currency' => $currency,
+                'amount' => $amount,
+                'tx_hash' => $txId,
+                'log_index' => $logIndex,
+                'from_address' => $fromAddress,
+                'to_address' => $toAddress,
+                'source' => 'tatum_webhook',
+                'status' => 'received',
+                'metadata' => [
+                    'subscription_type' => $subscriptionType,
+                    'network' => $baseBlockchain,
+                ],
             ]);
         });
     }

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\ProcessTatumWebhookJob;
 use App\Models\CryptoDepositAddress;
 use App\Models\MasterWallet;
+use App\Models\ReceivedAsset;
 use App\Models\TatumRawWebhook;
 use App\Models\Transaction;
 use App\Models\User;
@@ -87,9 +88,18 @@ class TatumWebhookTest extends TestCase
         $this->assertNotNull($tx);
         $this->assertEquals('0xtxhash1234567890123456789012345678901234567890123456789012345678', $tx->metadata['tx_hash'] ?? null);
 
+        $this->assertDatabaseHas('received_assets', [
+            'user_id' => $user->id,
+            'virtual_account_id' => $va->id,
+            'transaction_id' => $tx->id,
+            'tx_hash' => '0xtxhash1234567890123456789012345678901234567890123456789012345678',
+        ]);
+        $this->assertEquals(1, ReceivedAsset::query()->count());
+
         // Idempotent second delivery
         $this->postJson('/api/webhooks/tatum', $payload)->assertOk();
         $this->assertEquals(1, Transaction::query()->where('type', 'crypto_deposit')->count());
+        $this->assertEquals(1, ReceivedAsset::query()->count());
 
         $this->assertEquals(2, TatumRawWebhook::query()->count());
     }
@@ -244,6 +254,15 @@ class TatumWebhookTest extends TestCase
             'user_id' => $user->id,
             'type' => 'crypto_deposit',
             'currency' => 'USDT',
+        ]);
+
+        $tx = Transaction::query()->where('type', 'crypto_deposit')->where('user_id', $user->id)->first();
+        $this->assertNotNull($tx);
+        $this->assertDatabaseHas('received_assets', [
+            'user_id' => $user->id,
+            'transaction_id' => $tx->id,
+            'currency' => 'USDT',
+            'tx_hash' => '0x835188684f9d48779e67bc843efe2042ef0e474e6a1fdfda6db0bfd290ac8ba5',
         ]);
     }
 
