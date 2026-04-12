@@ -52,12 +52,34 @@ class CryptoService
     }
 
     /**
+     * Whether this `wallet_currencies.currency` value is USDT on any chain (ERC-20, BSC, TRON, …).
+     */
+    protected function isUsdtFamilyLedgerCurrency(?string $currency): bool
+    {
+        if ($currency === null || $currency === '') {
+            return false;
+        }
+
+        $c = strtoupper(trim($currency));
+
+        return $c === 'USDT' || str_starts_with($c, 'USDT_');
+    }
+
+    /**
      * Get USDT blockchains
+     *
+     * ERC-20 uses `currency` = USDT; BSC/TRON use USDT_BSC / USDT_TRON. Do not rely on `symbol` (may be null in DB).
      */
     public function getUsdtBlockchains(): array
     {
-        $usdtCurrencies = WalletCurrency::where('currency', 'USDT')
+        $usdtCurrencies = WalletCurrency::query()
             ->where('is_active', true)
+            ->where(function ($q) {
+                $q->where('currency', 'USDT')
+                    ->orWhereIn('currency', ['USDT_BSC', 'USDT_TRON', 'USDT_SOL', 'USDT_POLYGON'])
+                    ->orWhere('currency', 'like', 'USDT\_%');
+            })
+            ->orderBy('id')
             ->get();
 
         return $usdtCurrencies->map(function ($currency) {
@@ -66,14 +88,34 @@ class CryptoService
                 'blockchain' => $currency->blockchain,
                 'blockchain_name' => $currency->blockchain_name,
                 'network' => $currency->blockchain,
-                'currency' => $currency->currency,
-                'symbol' => $currency->symbol,
+                'currency' => 'USDT',
+                'symbol' => 'USDT',
                 'contract_address' => $currency->contract_address,
                 'decimals' => $currency->decimals,
                 'is_token' => $currency->is_token,
                 'crediting_time' => '1 min', // Default crediting time
             ];
         })->toArray();
+    }
+
+    /**
+     * Map user-facing USDT + chain to ledger row in `wallet_currencies` / `virtual_accounts.currency`.
+     */
+    protected function resolveUsdtLedgerCurrency(string $blockchainInput): string
+    {
+        $blockchain = DepositAddressService::normalizeBlockchain($blockchainInput);
+
+        $row = WalletCurrency::query()
+            ->where('is_active', true)
+            ->whereRaw('LOWER(blockchain) = ?', [strtolower($blockchain)])
+            ->where(function ($q) {
+                $q->where('currency', 'USDT')
+                    ->orWhereIn('currency', ['USDT_BSC', 'USDT_TRON', 'USDT_SOL', 'USDT_POLYGON'])
+                    ->orWhere('currency', 'like', 'USDT\_%');
+            })
+            ->first();
+
+        return $row ? strtoupper((string) $row->currency) : 'USDT';
     }
 
     /**
@@ -90,7 +132,7 @@ class CryptoService
         $usdtAccounts = [];
 
         foreach ($accounts as $account) {
-            if ($account->currency === 'USDT') {
+            if ($this->isUsdtFamilyLedgerCurrency($account->currency)) {
                 $usdtAccounts[] = $account;
             } else {
                 $grouped[] = $this->formatAccount($account);
@@ -144,9 +186,11 @@ class CryptoService
         $account = null;
 
         if ($currency === 'USDT' && $blockchain) {
+            $ledger = $this->resolveUsdtLedgerCurrency($blockchain);
+            $normB = DepositAddressService::normalizeBlockchain($blockchain);
             $account = VirtualAccount::where('user_id', $userId)
-                ->where('currency', 'USDT')
-                ->where('blockchain', $blockchain)
+                ->where('currency', $ledger)
+                ->whereRaw('LOWER(blockchain) = ?', [strtolower($normB)])
                 ->where('active', true)
                 ->with('walletCurrency.exchangeRate')
                 ->first();
@@ -167,7 +211,7 @@ class CryptoService
 
         // Get transactions for this currency and blockchain
         $transactionQuery = Transaction::where('user_id', $userId)
-            ->where('currency', $currency)
+            ->where('currency', $account->currency)
             ->whereIn('type', ['crypto_buy', 'crypto_sell', 'crypto_withdrawal', 'crypto_deposit']);
 
         // Filter by blockchain if provided
@@ -1063,6 +1107,10 @@ class CryptoService
     {
         $normalizedCurrency = strtoupper(trim($currency));
         $normalizedBlockchain = DepositAddressService::normalizeBlockchain($blockchain);
+
+        if ($normalizedCurrency === 'USDT') {
+            $normalizedCurrency = $this->resolveUsdtLedgerCurrency($normalizedBlockchain);
+        }
 
         return VirtualAccount::where('user_id', $userId)
             ->where('currency', $normalizedCurrency)
