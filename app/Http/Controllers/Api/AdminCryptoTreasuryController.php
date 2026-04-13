@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Models\CryptoSweepOrder;
+use App\Models\ReceivedAsset;
 use App\Models\Transaction;
 use App\Models\VirtualAccount;
 use App\Services\Crypto\CryptoTreasuryService;
@@ -34,9 +35,13 @@ class AdminCryptoTreasuryController extends Controller
         try {
             $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
             $paginator = $this->treasury->paginateDeposits($perPage, $request);
-
-            $paginator->getCollection()->transform(function (Transaction $t) {
+            $rows = collect($paginator->items())->map(function (Transaction $t) {
                 $vaId = data_get($t->metadata, 'virtual_account_id');
+                $asset = ReceivedAsset::query()
+                    ->select(['id', 'status', 'metadata'])
+                    ->where('transaction_id', $t->id)
+                    ->latest('id')
+                    ->first();
                 if ($vaId) {
                     $va = VirtualAccount::query()
                         ->select(['id', 'available_balance', 'account_balance', 'account_id', 'currency', 'blockchain', 'user_id'])
@@ -52,11 +57,19 @@ class AdminCryptoTreasuryController extends Controller
                 } else {
                     $t->setAttribute('virtual_account_hint', null);
                 }
+                $t->setAttribute('custody_status', $asset?->status ?? 'in_wallet');
 
                 return $t;
             });
+            $payload = [
+                'data' => $rows->values()->all(),
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ];
 
-            return ResponseHelper::success($paginator, 'Deposits retrieved.');
+            return ResponseHelper::success($payload, 'Deposits retrieved.');
         } catch (\Throwable $e) {
             Log::error('Admin crypto deposits failed', ['e' => $e->getMessage()]);
 

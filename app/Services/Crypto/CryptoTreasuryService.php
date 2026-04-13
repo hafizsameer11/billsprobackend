@@ -379,6 +379,13 @@ class CryptoTreasuryService
                 ->lockForUpdate()
                 ->firstOrFail();
             $this->debitVirtualAccountForSweep($account, (float) $order->amount);
+            $this->applySweepToReceivedAssets(
+                (int) $account->id,
+                (string) $order->currency,
+                (float) $order->amount,
+                (int) $order->id,
+                (string) $broadcast['txId']
+            );
 
             $order->update([
                 'status' => 'completed',
@@ -411,6 +418,58 @@ class CryptoTreasuryService
 
             return $order->fresh();
         });
+    }
+
+    protected function applySweepToReceivedAssets(
+        int $virtualAccountId,
+        string $currency,
+        float $sweepAmount,
+        int $sweepOrderId,
+        string $sweepTxHash
+    ): void {
+        if ($sweepAmount <= 0) {
+            return;
+        }
+
+        $remaining = $sweepAmount;
+        $rows = ReceivedAsset::query()
+            ->where('virtual_account_id', $virtualAccountId)
+            ->where('currency', strtoupper($currency))
+            ->whereIn('status', ['received', 'in_wallet', 'partially_disbursed'])
+            ->orderBy('created_at')
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($rows as $row) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $meta = is_array($row->metadata) ? $row->metadata : [];
+            $rowAmount = (float) $row->amount;
+            $alreadyDisbursed = (float) ($meta['disbursed_amount'] ?? 0);
+            $available = max(0.0, $rowAmount - $alreadyDisbursed);
+            if ($available <= 0) {
+                continue;
+            }
+
+            $consume = min($available, $remaining);
+            $newDisbursed = $alreadyDisbursed + $consume;
+            $left = max(0.0, $rowAmount - $newDisbursed);
+
+            $meta['disbursed_amount'] = (string) $newDisbursed;
+            $meta['remaining_amount'] = (string) $left;
+            $meta['last_sweep_order_id'] = $sweepOrderId;
+            $meta['last_sweep_tx_hash'] = $sweepTxHash;
+            $meta['last_swept_at'] = now()->toIso8601String();
+
+            $row->update([
+                'status' => $left <= 1e-12 ? 'disbursed' : 'partially_disbursed',
+                'metadata' => $meta,
+            ]);
+
+            $remaining -= $consume;
+        }
     }
 
     protected function debitVirtualAccountForSweep(VirtualAccount $account, float $amount): void
