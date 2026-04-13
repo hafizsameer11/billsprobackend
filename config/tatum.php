@@ -90,6 +90,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | EVM token tx fee defaults (Tatum /{chain}/transaction)
+    |--------------------------------------------------------------------------
+    */
+    'evm_token_fee' => [
+        'ethereum' => [
+            'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_ETH', 120000),
+        ],
+        'bsc' => [
+            'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_BSC', 120000),
+        ],
+        'polygon' => [
+            'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_POLYGON', 140000),
+        ],
+        'retry_multiplier' => (float) env('TATUM_EVM_GAS_RETRY_MULTIPLIER', 1.3),
+        'retry_min_bump' => (int) env('TATUM_EVM_GAS_RETRY_MIN_BUMP', 25000),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auto gas top-up (token sends from deposit addresses)
     |--------------------------------------------------------------------------
     |

@@ -133,9 +133,22 @@ class TatumOutboundTxService
             }
             $payload['currency'] = $currency;
             $payload['contractAddress'] = $contract;
+            $defaultGasLimit = (int) config("tatum.evm_token_fee.{$chain}.gas_limit", 120000);
+            if ($defaultGasLimit > 0) {
+                $payload['fee'] = [
+                    'gasLimit' => $defaultGasLimit,
+                ];
+            }
         }
-
-        $raw = $this->postV3($path, $payload);
+        try {
+            $raw = $this->postV3($path, $payload);
+        } catch (RuntimeException $e) {
+            if (! $isNative && str_contains(strtolower($e->getMessage()), 'intrinsic gas too low')) {
+                $raw = $this->retryEvmTokenWithHigherGasLimit($path, $payload, $e);
+            } else {
+                throw $e;
+            }
+        }
         $txId = (string) ($raw['txId'] ?? $raw['tx_id'] ?? '');
 
         if ($txId === '') {
@@ -143,6 +156,34 @@ class TatumOutboundTxService
         }
 
         return ['txId' => $txId, 'fee' => isset($raw['fee']) ? (string) $raw['fee'] : null, 'raw' => $raw];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function retryEvmTokenWithHigherGasLimit(string $path, array $payload, RuntimeException $e): array
+    {
+        $message = strtolower($e->getMessage());
+        $current = (int) data_get($payload, 'fee.gasLimit', 0);
+        $want = 0;
+        if (preg_match('/want\s+(\d+)/i', $message, $m) === 1) {
+            $want = (int) ($m[1] ?? 0);
+        }
+
+        $multiplier = (float) config('tatum.evm_token_fee.retry_multiplier', 1.3);
+        $minBump = (int) config('tatum.evm_token_fee.retry_min_bump', 25000);
+
+        $retryGasLimit = max(
+            $current + $minBump,
+            (int) ceil($want > 0 ? $want * $multiplier : ($current > 0 ? $current * $multiplier : 120000))
+        );
+
+        $payload['fee'] = [
+            'gasLimit' => $retryGasLimit,
+        ];
+
+        return $this->postV3($path, $payload);
     }
 
     protected function ensureEvmGasTopUp(string $chain, string $sourceAddress): void
