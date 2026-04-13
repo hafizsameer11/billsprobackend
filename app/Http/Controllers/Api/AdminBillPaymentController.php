@@ -36,6 +36,11 @@ class AdminBillPaymentController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+        ]);
+
         $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
 
         $q = Transaction::query()
@@ -74,6 +79,13 @@ class AdminBillPaymentController extends Controller
                             ->orWhere('last_name', 'like', $s);
                     });
             });
+        }
+
+        if ($request->filled('from')) {
+            $q->whereDate('created_at', '>=', (string) $request->query('from'));
+        }
+        if ($request->filled('to')) {
+            $q->whereDate('created_at', '<=', (string) $request->query('to'));
         }
 
         $paginator = $q->paginate($perPage);

@@ -60,4 +60,55 @@ return [
     'tron' => [
         'fee_limit_sun' => (int) env('TATUM_TRON_FEE_LIMIT_SUN', 100_000_000),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | ERC-20 human-readable decimals (for outbound tx `amount` strings)
+    |--------------------------------------------------------------------------
+    |
+    | Must match each token contract's decimals() on-chain. Wrong values cause
+    | Tatum/ethers "invalid BigNumber string". BSC USDT/USDC are typically 18;
+    | Ethereum mainnet USDT/USDC are 6.
+    |
+    */
+    'evm_erc20_decimals' => [
+        'ethereum' => [
+            'USDT' => 6,
+            'USDC' => 6,
+        ],
+        'bsc' => [
+            'USDT' => 18,
+            'USDC' => 18,
+        ],
+        'polygon' => [
+            'USDT' => 6,
+            'USDC' => 6,
+        ],
+    ],
+
+    'evm_erc20_decimals_default' => 18,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auto gas top-up (token sends from deposit addresses)
+    |--------------------------------------------------------------------------
+    |
+    | When sweeping ERC-20-like assets from user deposit addresses, the source
+    | address may not have enough native gas. If enabled, we top up from chain
+    | master wallet before broadcasting token transfer.
+    |
+    */
+    'gas_topup' => [
+        'enabled' => filter_var(env('TATUM_GAS_TOPUP_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'evm_min_native_balance' => [
+            'ethereum' => env('TATUM_GAS_MIN_ETH', '0.002'),
+            'bsc' => env('TATUM_GAS_MIN_BSC', '0.001'),
+            'polygon' => env('TATUM_GAS_MIN_MATIC', '0.5'),
+        ],
+        'evm_topup_amount' => [
+            'ethereum' => env('TATUM_GAS_TOPUP_ETH', '0.003'),
+            'bsc' => env('TATUM_GAS_TOPUP_BSC', '0.002'),
+            'polygon' => env('TATUM_GAS_TOPUP_MATIC', '1'),
+        ],
+    ],
 ];

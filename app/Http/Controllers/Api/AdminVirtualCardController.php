@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
@@ -137,6 +138,8 @@ class AdminVirtualCardController extends Controller
         $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
         $status = (string) $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
+        $from = (string) $request->query('from', '');
+        $to = (string) $request->query('to', '');
 
         $aggSub = VirtualCard::query()
             ->when($status === 'active', fn ($q) => $q->where('is_frozen', false))
@@ -175,6 +178,12 @@ class AdminVirtualCardController extends Controller
                         ->orWhere('users.last_name', 'like', $like)
                         ->orWhere('users.phone_number', 'like', $like);
                 });
+            })
+            ->when($from !== '', function ($q) use ($from) {
+                $q->whereDate('users.created_at', '>=', $from);
+            })
+            ->when($to !== '', function ($q) use ($to) {
+                $q->whereDate('users.created_at', '<=', $to);
             })
             ->orderByDesc(DB::raw('agg.total_balance'));
 
@@ -215,6 +224,23 @@ class AdminVirtualCardController extends Controller
         $this->audit->log((int) $request->user()->id, 'virtual_card.unfreeze', $card, [], $request);
 
         return ResponseHelper::success($result['data'] ?? null, $result['message'] ?? 'Card unfrozen.');
+    }
+
+    public function fund(FundCardRequest $request, int $id): JsonResponse
+    {
+        $card = VirtualCard::query()->findOrFail($id);
+        $result = $this->virtualCardService->fundCard((int) $card->user_id, $id, $request->validated());
+        if (! ($result['success'] ?? false)) {
+            return ResponseHelper::error($result['message'] ?? 'Card funding failed', (int) ($result['status'] ?? 400));
+        }
+
+        $this->audit->log((int) $request->user()->id, 'virtual_card.fund', $card, [
+            'amount' => $request->input('amount'),
+            'payment_wallet_type' => $request->input('payment_wallet_type'),
+            'payment_wallet_currency' => $request->input('payment_wallet_currency'),
+        ], $request);
+
+        return ResponseHelper::success($result['data'] ?? null, $result['message'] ?? 'Card funded.');
     }
 
     private function formatAdminCardSummary(VirtualCard $card, int $userId): array

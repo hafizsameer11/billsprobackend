@@ -74,6 +74,12 @@ class AdminMasterWalletController extends Controller
         } elseif ($tab === 'naira') {
             $q->whereRaw('1 = 0');
         }
+        if ($request->filled('from')) {
+            $q->whereDate('created_at', '>=', (string) $request->query('from'));
+        }
+        if ($request->filled('to')) {
+            $q->whereDate('created_at', '<=', (string) $request->query('to'));
+        }
 
         $paginator = $q->paginate($perPage);
         $paginator->getCollection()->transform(fn (MasterWalletTransaction $r) => $this->formatMwRow($r));

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
+use App\Models\AdminAuditLog;
 use App\Models\Deposit;
 use App\Models\Transaction;
 use App\Models\User;
@@ -25,6 +26,8 @@ class AdminUserController extends Controller
             'account_status' => $request->query('account_status'),
             'is_admin' => $request->query('is_admin'),
             'kyc_filter' => $request->query('kyc_filter'),
+            'from' => $request->query('from'),
+            'to' => $request->query('to'),
         ];
 
         return ResponseHelper::success(
@@ -99,6 +102,13 @@ class AdminUserController extends Controller
         return ResponseHelper::success(null, 'All tokens revoked.');
     }
 
+    public function resetPassword(Request $request, User $user): JsonResponse
+    {
+        $result = $this->adminUsers->adminResetPassword($user, (int) $request->user()->id, $request);
+
+        return ResponseHelper::success($result, 'User password reset and tokens revoked.');
+    }
+
     public function timeline(Request $request, User $user): JsonResponse
     {
         $limit = min(100, max(1, (int) $request->query('limit', 50)));
@@ -115,5 +125,45 @@ class AdminUserController extends Controller
                 ->limit($limit)
                 ->get(),
         ], 'Timeline retrieved.');
+    }
+
+    public function storeAdmin(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'first_name' => 'nullable|string|max:255',
+            'last_name' => 'nullable|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:8|max:255',
+        ]);
+
+        $admin = $this->adminUsers->createAdmin($data, (int) $request->user()->id, $request);
+        $admin->makeVisible(['internal_notes']);
+
+        return ResponseHelper::success($admin, 'Admin user created.', 201);
+    }
+
+    public function destroy(Request $request, User $user): JsonResponse
+    {
+        if (! $user->is_admin) {
+            return ResponseHelper::error('Target user is not an admin.', 422);
+        }
+        if ((int) $request->user()->id === (int) $user->id) {
+            return ResponseHelper::error('You cannot delete your own admin account.', 422);
+        }
+
+        $this->adminUsers->deleteAdmin($user, (int) $request->user()->id, $request);
+
+        return ResponseHelper::success(null, 'Admin user deleted.');
+    }
+
+    public function auditLogs(Request $request, User $user): JsonResponse
+    {
+        $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
+        $paginator = AdminAuditLog::query()
+            ->where('admin_user_id', $user->id)
+            ->orderByDesc('id')
+            ->paginate($perPage);
+
+        return ResponseHelper::success($paginator, 'Admin audit logs retrieved.');
     }
 }

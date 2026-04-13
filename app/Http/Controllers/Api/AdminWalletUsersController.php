@@ -50,6 +50,12 @@ class AdminWalletUsersController extends Controller
                     ->orWhere('phone_number', 'like', $like);
             });
         }
+        if ($request->filled('from')) {
+            $q->whereDate('created_at', '>=', (string) $request->query('from'));
+        }
+        if ($request->filled('to')) {
+            $q->whereDate('created_at', '<=', (string) $request->query('to'));
+        }
 
         $paginator = $q->paginate($perPage);
 

@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\AdminDepositController;
 use App\Http\Controllers\Api\AdminFiatWalletController;
 use App\Http\Controllers\Api\AdminKycController;
 use App\Http\Controllers\Api\AdminMasterWalletController;
+use App\Http\Controllers\Api\AdminNotificationController;
 use App\Http\Controllers\Api\AdminPlatformRateController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
@@ -216,13 +217,17 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/wallet-users/totals', [AdminWalletUsersController::class, 'totals']);
 
         Route::get('/users', [AdminUserController::class, 'index']);
+        Route::post('/users/admin-create', [AdminUserController::class, 'storeAdmin']);
         Route::get('/users/{user}', [AdminUserController::class, 'show']);
         Route::patch('/users/{user}', [AdminUserController::class, 'update']);
+        Route::delete('/users/{user}', [AdminUserController::class, 'destroy']);
         Route::post('/users/{user}/suspend', [AdminUserController::class, 'suspend']);
         Route::post('/users/{user}/unsuspend', [AdminUserController::class, 'unsuspend']);
         Route::post('/users/{user}/ban', [AdminUserController::class, 'ban']);
         Route::post('/users/{user}/tokens/revoke', [AdminUserController::class, 'revokeTokens']);
+        Route::post('/users/{user}/password/reset', [AdminUserController::class, 'resetPassword']);
         Route::get('/users/{user}/timeline', [AdminUserController::class, 'timeline']);
+        Route::get('/users/{user}/audit-logs', [AdminUserController::class, 'auditLogs']);
 
         Route::get('/users/{user}/fiat-wallets', [AdminFiatWalletController::class, 'forUser']);
         Route::patch('/fiat-wallets/{fiatWallet}', [AdminFiatWalletController::class, 'update']);
@@ -270,12 +275,20 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/virtual-cards/{id}', [AdminVirtualCardController::class, 'show']);
         Route::post('/virtual-cards/{id}/freeze', [AdminVirtualCardController::class, 'freeze']);
         Route::post('/virtual-cards/{id}/unfreeze', [AdminVirtualCardController::class, 'unfreeze']);
+        Route::post('/virtual-cards/{id}/fund', [AdminVirtualCardController::class, 'fund']);
 
         Route::get('/support/tickets/summary', [AdminSupportTicketController::class, 'summary']);
         Route::get('/support/tickets', [AdminSupportTicketController::class, 'index']);
         Route::get('/support/tickets/{supportTicket}', [AdminSupportTicketController::class, 'show']);
         Route::post('/support/tickets/{supportTicket}/messages', [AdminSupportTicketController::class, 'storeMessage']);
         Route::patch('/support/tickets/{supportTicket}', [AdminSupportTicketController::class, 'update']);
+
+        Route::get('/notifications', [AdminNotificationController::class, 'index']);
+        Route::post('/notifications', [AdminNotificationController::class, 'store']);
+        Route::delete('/notifications/{notification}', [AdminNotificationController::class, 'destroy']);
+        Route::get('/notifications/banners', [AdminNotificationController::class, 'banners']);
+        Route::post('/notifications/banners', [AdminNotificationController::class, 'storeBanner']);
+        Route::delete('/notifications/banners/{banner}', [AdminNotificationController::class, 'destroyBanner']);
 
         Route::prefix('webhooks')->group(function () {
             Route::get('/tatum/raw', [AdminWebhookController::class, 'tatumRaw']);
