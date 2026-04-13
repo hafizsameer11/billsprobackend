@@ -96,13 +96,17 @@ return [
     'evm_token_fee' => [
         'ethereum' => [
             'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_ETH', 120000),
+            'gas_price_gwei' => env('TATUM_EVM_GAS_PRICE_ETH', ''),
         ],
         'bsc' => [
             'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_BSC', 120000),
+            'gas_price_gwei' => env('TATUM_EVM_GAS_PRICE_BSC', ''),
         ],
         'polygon' => [
             'gas_limit' => (int) env('TATUM_EVM_GAS_LIMIT_POLYGON', 140000),
+            'gas_price_gwei' => env('TATUM_EVM_GAS_PRICE_POLYGON', ''),
         ],
+        'default_gas_price_gwei' => env('TATUM_EVM_GAS_PRICE_DEFAULT', '20'),
         'retry_multiplier' => (float) env('TATUM_EVM_GAS_RETRY_MULTIPLIER', 1.3),
         'retry_min_bump' => (int) env('TATUM_EVM_GAS_RETRY_MIN_BUMP', 25000),
     ],

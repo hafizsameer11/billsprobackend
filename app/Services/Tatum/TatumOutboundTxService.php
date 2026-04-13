@@ -136,7 +136,8 @@ class TatumOutboundTxService
             $defaultGasLimit = (int) config("tatum.evm_token_fee.{$chain}.gas_limit", 120000);
             if ($defaultGasLimit > 0) {
                 $payload['fee'] = [
-                    'gasLimit' => $defaultGasLimit,
+                    'gasLimit' => (string) $defaultGasLimit,
+                    'gasPrice' => $this->resolveEvmGasPrice($chain),
                 ];
             }
         }
@@ -180,10 +181,48 @@ class TatumOutboundTxService
         );
 
         $payload['fee'] = [
-            'gasLimit' => $retryGasLimit,
+            'gasLimit' => (string) $retryGasLimit,
+            'gasPrice' => (string) data_get($payload, 'fee.gasPrice', $this->resolveEvmGasPriceFromConfig($path)),
         ];
 
         return $this->postV3($path, $payload);
+    }
+
+    protected function resolveEvmGasPrice(string $chain): string
+    {
+        $fromConfig = (string) config("tatum.evm_token_fee.{$chain}.gas_price_gwei", '');
+        if ($fromConfig !== '') {
+            return $this->normalizeGasPriceString($fromConfig);
+        }
+
+        $path = match ($chain) {
+            'ethereum' => '/ethereum/gas',
+            'bsc' => '/bsc/gas',
+            'polygon' => '/polygon/gas',
+            default => null,
+        };
+        if (! $path) {
+            return $this->normalizeGasPriceString((string) config('tatum.evm_token_fee.default_gas_price_gwei', '20'));
+        }
+
+        try {
+            $raw = $this->getV3($path);
+            $candidate = (string) ($raw['gasPrice'] ?? $raw['fast'] ?? $raw['medium'] ?? $raw['slow'] ?? '');
+            if ($candidate !== '' && is_numeric($candidate)) {
+                return $this->normalizeGasPriceString($candidate);
+            }
+        } catch (\Throwable) {
+            // fallback to config default
+        }
+
+        return $this->normalizeGasPriceString((string) config('tatum.evm_token_fee.default_gas_price_gwei', '20'));
+    }
+
+    protected function resolveEvmGasPriceFromConfig(string $path): string
+    {
+        $chain = str_contains($path, '/bsc/') ? 'bsc' : (str_contains($path, '/polygon/') ? 'polygon' : 'ethereum');
+
+        return $this->resolveEvmGasPrice($chain);
     }
 
     protected function ensureEvmGasTopUp(string $chain, string $sourceAddress): void
@@ -528,5 +567,19 @@ class TatumOutboundTxService
         }
 
         return $af > $bf ? 1 : -1;
+    }
+
+    protected function normalizeGasPriceString(string $value): string
+    {
+        $v = trim($value);
+        if ($v === '' || ! is_numeric($v)) {
+            return '20';
+        }
+
+        if (extension_loaded('bcmath')) {
+            return $this->trimInsignificantFractionZeros(bcadd($v, '0', 9));
+        }
+
+        return $this->trimInsignificantFractionZeros(number_format((float) $v, 9, '.', ''));
     }
 }
