@@ -396,6 +396,7 @@ class TransactionController extends Controller
         $formatted = [
             'id' => $transaction->id,
             'transaction_id' => $transaction->transaction_id,
+            'wallet_type' => $this->transactionService->walletTypeFor($transaction),
             'type' => $transaction->type,
             'category' => $transaction->category,
             'status' => $transaction->status,

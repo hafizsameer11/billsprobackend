@@ -18,7 +18,7 @@ use OpenApi\Attributes as OA;
 
 #[OA\Tag(
     name: 'Virtual Cards',
-    description: 'Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using `VIRTUAL_CARD_*` fees, then calls the provider with `firstname`, `lastname`, `email`. **Fund** loads the card at the provider for the USD `amount`, then debits the user\'s Naira or Crypto wallet per `VIRTUAL_CARD_*` fund settings (`GET /virtual-cards/funding-estimate` for quotes). Configure `MASTERCARD_API_*` env keys.'
+    description: 'Virtual Mastercard via reseller API (`/api/mastercard/*`). **Create** debits `naira_wallet` or `crypto_wallet` using admin platform rates (`GET /virtual-cards/creation-fee`), then calls the provider with `firstname`, `lastname`, `email`. **Fund** loads the card at the provider for the USD `amount`, then debits wallets per `VIRTUAL_CARD_*` fund settings (`GET /virtual-cards/funding-estimate` for quotes). Configure `MASTERCARD_API_*` env keys.'
 )]
 class VirtualCardController extends Controller
 {
@@ -76,7 +76,8 @@ class VirtualCardController extends Controller
                 (string) ($v['payment_wallet_currency'] ?? 'NGN')
             );
 
-            return ResponseHelper::success($estimate, 'Funding estimate retrieved successfully.');
+            return ResponseHelper::success($estimate, 'Funding estimate retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
         } catch (\Exception $e) {
             Log::error('Funding estimate error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -88,14 +89,45 @@ class VirtualCardController extends Controller
     }
 
     /**
+     * Quote for virtual card creation fee (admin platform rate `virtual_card` / `creation`).
+     */
+    #[OA\Get(
+        path: '/api/virtual-cards/creation-fee',
+        summary: 'Card creation fee quote',
+        description: 'Returns `fee_usd`, `exchange_rate_ngn_per_usd`, and `fee_ngn` from admin-configured platform rates (same rules as POST create wallet debit).',
+        security: [['sanctum' => []]],
+        tags: ['Virtual Cards'],
+    )]
+    #[OA\Response(response: 200, description: 'Quote returned', content: new OA\JsonContent(properties: [
+        new OA\Property(property: 'success', type: 'boolean', example: true),
+        new OA\Property(property: 'data', type: 'object'),
+    ]))]
+    public function creationFee(Request $request): JsonResponse
+    {
+        try {
+            $quote = $this->virtualCardService->getCreationFeeQuote();
+
+            return ResponseHelper::success($quote, 'Creation fee quote retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
+        } catch (\Exception $e) {
+            Log::error('Creation fee quote error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while retrieving the creation fee.');
+        }
+    }
+
+    /**
      * Create virtual card
      */
     #[OA\Post(
         path: '/api/virtual-cards',
         summary: 'Create virtual Mastercard',
         description: 'Issues a virtual Mastercard. **Wallet fee (required):** `payment_wallet_type` = `naira_wallet` or `crypto_wallet`. '
-            .'Naira fee (NGN) = `VIRTUAL_CARD_CREATION_FEE_USD` × `VIRTUAL_CARD_USD_TO_NGN_RATE` + `VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN`. '
-            .'Crypto fee (USD equivalent) matches the same total. Balance is checked **before** calling the provider; fee is debited **after** successful issue. '
+            .'Naira fee (NGN) = admin **creation** USD fee × NGN/USD rate from platform rates (no separate NGN processing line). '
+            .'Crypto path debits the USD fee amount. Balance is checked **before** calling the provider; fee is debited **after** successful issue. '
             .'**Provider body:** `firstname`, `lastname`, `email` (defaults from the authenticated user; optional `email` / `useremail` override). KYC fields are optional for local/billing only.',
         security: [['sanctum' => []]],
         tags: ['Virtual Cards'],
@@ -120,7 +152,7 @@ class VirtualCardController extends Controller
                 new OA\Property(property: 'email', description: 'Overrides email sent to provider', type: 'string', format: 'email', nullable: true),
                 new OA\Property(property: 'useremail', description: 'Alias of email for provider', type: 'string', format: 'email', nullable: true, example: 'merchantuser@billspro.hmstech.org'),
                 new OA\Property(property: 'card_name', type: 'string', nullable: true, example: 'John Doe Merchant Card'),
-                new OA\Property(property: 'card_color', type: 'string', nullable: true, enum: ['green', 'brown', 'purple'], example: 'green'),
+                new OA\Property(property: 'card_color', type: 'string', nullable: true, enum: ['green', 'black', 'purple', 'red', 'blue', 'brown'], example: 'green'),
                 new OA\Property(property: 'billing_address_street', type: 'string', nullable: true),
                 new OA\Property(property: 'billing_address_city', type: 'string', nullable: true),
                 new OA\Property(property: 'billing_address_state', type: 'string', nullable: true),

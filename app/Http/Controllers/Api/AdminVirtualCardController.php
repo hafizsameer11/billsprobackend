@@ -248,8 +248,10 @@ class AdminVirtualCardController extends Controller
         $label = $this->cardOrdinalLabel($card, $userId);
         $color = (string) ($card->card_color ?? 'green');
         $variant = match ($color) {
-            'brown' => 'orange',
+            'brown', 'black' => 'orange',
             'purple' => 'pink',
+            'red' => 'orange',
+            'blue' => 'pink',
             default => 'green',
         };
         $lastFour = $card->card_number ? substr((string) $card->card_number, -4) : '0000';

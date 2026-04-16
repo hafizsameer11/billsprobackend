@@ -2,11 +2,12 @@
 
 return [
     /*
-    | Card initialization (creation) fee charged from user's naira or crypto wallet.
-    | Fee matches previous app behavior: USD component + fixed NGN processing.
+    | Card creation fee (USD) — fallback when admin platform rate has no `fee_usd`.
+    | Charged amount: fee_usd × exchange_rate_ngn_per_usd from the `virtual_card` / `creation` platform rate (no extra NGN processing).
     */
     'creation_fee_usd' => (float) env('VIRTUAL_CARD_CREATION_FEE_USD', 3.0),
-    'creation_processing_fee_ngn' => (float) env('VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN', 500.0),
+    /** @deprecated No longer added to creation fee; kept for env compatibility only. */
+    'creation_processing_fee_ngn' => (float) env('VIRTUAL_CARD_CREATION_PROCESSING_FEE_NGN', 0.0),
     'usd_to_ngn_rate' => (float) env('VIRTUAL_CARD_USD_TO_NGN_RATE', 1500.0),
 
     /*

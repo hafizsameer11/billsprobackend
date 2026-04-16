@@ -24,6 +24,12 @@ return [
 
     'timeout' => (int) env('PALMPAY_HTTP_TIMEOUT', 30),
 
+    /*
+     * Optional base URL when PalmPay returns relative bank logo paths.
+     * Example: https://static.palmpay.com (no trailing slash).
+     */
+    'bank_logo_cdn_base' => env('PALMPAY_BANK_LOGO_CDN_BASE', ''),
+
     'min_deposit_ngn' => (float) env('PALMPAY_MIN_DEPOSIT_NGN', 100),
 
     /*

@@ -16,7 +16,7 @@ class AdminPlatformRateController extends Controller
     public function meta(): JsonResponse
     {
         $fiatServices = [
-            ['key' => 'deposit', 'label' => 'Deposit'],
+            ['key' => 'deposit', 'label' => 'Fiat deposit (flat NGN fee, legacy flow)'],
             ['key' => 'withdrawal', 'label' => 'Withdrawal'],
             ['key' => 'bill_payment', 'label' => 'Bill Payment'],
         ];
@@ -30,11 +30,10 @@ class AdminPlatformRateController extends Controller
             ->all();
 
         $cryptoServices = [
-            ['key' => 'deposit', 'label' => 'Deposit'],
-            ['key' => 'withdrawal', 'label' => 'Withdrawal'],
-            ['key' => 'buy', 'label' => 'Buy'],
-            ['key' => 'sell', 'label' => 'Sell'],
-            ['key' => 'send', 'label' => 'Send'],
+            ['key' => 'deposit', 'label' => 'Deposit (on-chain receive)'],
+            ['key' => 'withdrawal', 'label' => 'Send / withdrawal (on-chain out)'],
+            ['key' => 'buy', 'label' => 'Buy (exchange rate only — no extra fees)'],
+            ['key' => 'sell', 'label' => 'Sell (exchange rate only — no extra fees)'],
         ];
 
         $cryptoAssets = WalletCurrency::query()
@@ -155,6 +154,7 @@ class AdminPlatformRateController extends Controller
             'fixed_fee_ngn' => ['nullable', 'numeric', 'min:0'],
             'percentage_fee' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'min_fee_ngn' => ['nullable', 'numeric', 'min:0'],
+            'fee_usd' => ['nullable', 'numeric', 'min:0', 'max:100000'],
             'is_active' => ['sometimes', 'boolean'],
         ];
 
@@ -177,6 +177,7 @@ class AdminPlatformRateController extends Controller
             'fixed_fee_ngn' => (string) $r->fixed_fee_ngn,
             'percentage_fee' => $r->percentage_fee !== null ? (string) $r->percentage_fee : null,
             'min_fee_ngn' => $r->min_fee_ngn !== null ? (string) $r->min_fee_ngn : null,
+            'fee_usd' => $r->fee_usd !== null ? (string) $r->fee_usd : null,
             'is_active' => (bool) $r->is_active,
             'updated_at' => $r->updated_at?->toIso8601String(),
             'created_at' => $r->created_at?->toIso8601String(),

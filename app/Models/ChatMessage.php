@@ -4,9 +4,14 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Storage;
 
 class ChatMessage extends Model
 {
+    protected $appends = ['attachment'];
+
+    protected $hidden = ['attachment_path', 'attachment_type'];
+
     protected $fillable = [
         'chat_session_id',
         'user_id',
@@ -24,6 +29,18 @@ class ChatMessage extends Model
         return [
             'read_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Public URL for the stored attachment (mobile clients expect `attachment`).
+     */
+    public function getAttachmentAttribute(): ?string
+    {
+        if (! $this->attachment_path) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($this->attachment_path);
     }
 
     /**

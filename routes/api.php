@@ -114,6 +114,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // DEPOSIT ROUTES
     // ========================================================================
     Route::prefix('deposit')->group(function () {
+        Route::get('/fee', [DepositController::class, 'fee']);
         Route::get('/bank-account', [DepositController::class, 'getBankAccount']);
         Route::post('/initiate', [DepositController::class, 'initiate']);
         Route::post('/confirm', [DepositController::class, 'confirm']);
@@ -241,6 +242,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/transactions/{transactionId}', [AdminTransactionController::class, 'show']);
 
         Route::get('/deposits', [AdminDepositController::class, 'index']);
+        Route::get('/deposit-fee-quote', [AdminDepositController::class, 'feeQuote']);
         Route::get('/deposits/{id}', [AdminDepositController::class, 'show']);
 
         Route::get('/withdrawals', [AdminWithdrawalController::class, 'index']);
@@ -352,6 +354,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::post('/sell/confirm', [CryptoController::class, 'confirmSellCrypto']);
 
         // Send Crypto (Withdrawal)
+        Route::get('/send/fee-preview', [CryptoController::class, 'previewSendFee']);
         Route::post('/send', [CryptoController::class, 'sendCrypto']);
     });
 
@@ -361,6 +364,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     Route::prefix('virtual-cards')->group(function () {
         Route::get('/', [VirtualCardController::class, 'index']);
         Route::get('/funding-estimate', [VirtualCardController::class, 'fundingEstimate']);
+        Route::get('/creation-fee', [VirtualCardController::class, 'creationFee']);
         Route::post('/', [VirtualCardController::class, 'create']);
         Route::get('/{id}', [VirtualCardController::class, 'show']);
         Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);

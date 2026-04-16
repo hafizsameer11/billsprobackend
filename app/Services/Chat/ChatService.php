@@ -2,11 +2,13 @@
 
 namespace App\Services\Chat;
 
-use App\Models\ChatSession;
 use App\Models\ChatMessage;
-use App\Models\User;
+use App\Models\ChatSession;
+use App\Models\SupportTicket;
+use App\Models\SupportTicketMessage;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class ChatService
 {
@@ -76,10 +78,11 @@ class ChatService
                 ];
             }
 
-            // Create new session
+            // Create new session + linked support ticket (admin dashboard lists `support_tickets`)
             $session = $this->createSession($userId, $issueType);
+            $this->createLinkedSupportTicket($session, $issueType, $userId, $message);
 
-            // Send first message
+            // Send first message (also mirrored into the ticket thread)
             $chatMessage = $this->sendMessage($session->id, $userId, $message, 'user');
 
             DB::commit();
@@ -123,6 +126,10 @@ class ChatService
             'last_message_at' => now(),
             'status' => $session->status === 'waiting' && $senderType === 'user' ? 'active' : $session->status,
         ]);
+
+        if ($senderType === 'user') {
+            $this->mirrorUserChatToSupportTicket($session, $chatMessage);
+        }
 
         return $chatMessage->load(['user', 'admin', 'chatSession']);
     }
@@ -168,6 +175,71 @@ class ChatService
             'status' => 'closed',
         ]);
 
+        SupportTicket::query()
+            ->where('chat_session_id', $sessionId)
+            ->whereNotIn('status', ['closed', 'resolved'])
+            ->update([
+                'status' => 'closed',
+                'resolved_at' => now(),
+            ]);
+
         return $session->fresh(['user', 'admin', 'messages']);
+    }
+
+    private function subjectForIssueType(string $issueType): string
+    {
+        return match ($issueType) {
+            'fiat_issue' => 'Fiat — Live chat',
+            'virtual_card_issue' => 'Virtual card — Live chat',
+            'crypto_issue' => 'Crypto — Live chat',
+            default => 'Support — Live chat',
+        };
+    }
+
+    private function createLinkedSupportTicket(ChatSession $session, string $issueType, int $userId, string $firstMessage): SupportTicket
+    {
+        return SupportTicket::create([
+            'user_id' => $userId,
+            'chat_session_id' => $session->id,
+            'ticket_number' => SupportTicket::generateTicketNumber(),
+            'subject' => $this->subjectForIssueType($issueType),
+            'description' => $firstMessage,
+            'issue_type' => $issueType,
+            'status' => 'open',
+            'priority' => 'medium',
+        ]);
+    }
+
+    private function mirrorUserChatToSupportTicket(ChatSession $session, ChatMessage $chatMessage): void
+    {
+        if ($chatMessage->sender_type !== 'user') {
+            return;
+        }
+
+        $ticket = SupportTicket::query()
+            ->where('chat_session_id', $session->id)
+            ->whereNotIn('status', ['closed', 'resolved'])
+            ->first();
+
+        if (! $ticket) {
+            return;
+        }
+
+        $body = trim((string) $chatMessage->message);
+        if ($chatMessage->attachment_path) {
+            $url = Storage::disk('public')->url($chatMessage->attachment_path);
+            $body = $body !== '' ? $body."\n\n" : '';
+            $body .= '[Image] '.$url;
+        }
+        if ($body === '') {
+            $body = '[Attachment]';
+        }
+
+        SupportTicketMessage::create([
+            'support_ticket_id' => $ticket->id,
+            'sender_role' => SupportTicketMessage::ROLE_USER,
+            'user_id' => $session->user_id,
+            'body' => $body,
+        ]);
     }
 }

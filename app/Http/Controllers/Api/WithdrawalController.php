@@ -264,6 +264,7 @@ class WithdrawalController extends Controller
             'amount' => ['required', 'numeric', 'min:1'],
             'currency' => ['sometimes', 'string', 'max:10'],
             'bankCode' => ['required', 'string', 'max:20'],
+            'bankName' => ['nullable', 'string', 'max:160'],
             'accountNumber' => ['required', 'string', 'min:6', 'max:30'],
             'accountName' => ['required', 'string', 'max:120'],
             'phoneNumber' => ['nullable', 'string', 'max:20'],
@@ -283,7 +284,8 @@ class WithdrawalController extends Controller
                 (string) $request->input('bankCode'),
                 (string) $request->input('accountNumber'),
                 (string) $request->input('accountName'),
-                $request->input('phoneNumber')
+                $request->input('phoneNumber'),
+                $request->input('bankName') ? (string) $request->input('bankName') : null
             );
 
             $payoutStatus = $result['payout_status'] ?? 'completed';

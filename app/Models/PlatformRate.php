@@ -16,6 +16,7 @@ class PlatformRate extends Model
         'fixed_fee_ngn',
         'percentage_fee',
         'min_fee_ngn',
+        'fee_usd',
         'is_active',
         'slug',
     ];
@@ -27,6 +28,7 @@ class PlatformRate extends Model
             'fixed_fee_ngn' => 'decimal:4',
             'percentage_fee' => 'decimal:4',
             'min_fee_ngn' => 'decimal:4',
+            'fee_usd' => 'decimal:4',
             'is_active' => 'boolean',
         ];
     }

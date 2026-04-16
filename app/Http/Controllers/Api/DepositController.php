@@ -6,6 +6,7 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Deposit\ConfirmDepositRequest;
 use App\Http\Requests\Deposit\InitiateDepositRequest;
+use App\Services\Deposit\DepositFeePreviewService;
 use App\Services\Deposit\DepositService;
 use App\Services\PalmPay\PalmPayDepositService;
 use App\Support\PalmPayConfig;
@@ -19,8 +20,32 @@ class DepositController extends Controller
 {
     public function __construct(
         protected DepositService $depositService,
-        protected PalmPayDepositService $palmPayDepositService
+        protected PalmPayDepositService $palmPayDepositService,
+        protected DepositFeePreviewService $depositFeePreview
     ) {}
+
+    /**
+     * NGN fee for the active deposit flow (legacy platform rate vs PalmPay with no separate line fee).
+     */
+    #[OA\Get(path: '/api/deposit/fee', summary: 'Deposit fee quote', description: 'Returns the fee (NGN) that applies to the next POST /deposit/initiate for this environment: PalmPay checkout uses 0; legacy merchant transfer uses admin platform rate `fiat` / `deposit` (`fixed_fee_ngn`).', security: [['sanctum' => []]], tags: ['Deposit'])]
+    #[OA\Response(response: 200, description: 'Fee quote', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 401, description: 'Unauthenticated')]
+    public function fee(Request $request): JsonResponse
+    {
+        try {
+            return ResponseHelper::success(
+                $this->depositFeePreview->quoteForAuthenticatedDepositFlow(),
+                'Deposit fee retrieved successfully.'
+            );
+        } catch (\Exception $e) {
+            Log::error('Deposit fee quote error: '.$e->getMessage(), [
+                'user_id' => $request->user()?->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while retrieving deposit fee.');
+        }
+    }
 
     /**
      * Get deposit bank account details
@@ -88,6 +113,7 @@ class DepositController extends Controller
                     'reference' => $deposit->deposit_reference,
                     'amount' => $deposit->amount,
                     'fee' => $deposit->fee,
+                    'display_fee_ngn' => $this->depositFeePreview->displayFiatDepositFeeNgn(200.0),
                     'total_amount' => $deposit->total_amount,
                     'palmpay' => [
                         'merchantOrderId' => $pp['palmPayOrder']->merchant_order_id ?? null,
@@ -109,6 +135,7 @@ class DepositController extends Controller
                 'reference' => $result['reference'],
                 'amount' => $result['deposit']->amount,
                 'fee' => $result['deposit']->fee,
+                'display_fee_ngn' => (float) $result['deposit']->fee,
                 'total_amount' => $result['deposit']->total_amount,
             ], $result['message'] ?? 'Deposit initiated successfully.');
         } catch (\Throwable $e) {

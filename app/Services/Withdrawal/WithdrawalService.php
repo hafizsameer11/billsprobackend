@@ -192,7 +192,23 @@ class WithdrawalService
      */
     public function getPalmPayBanks(int $businessType = 0): array
     {
-        return $this->palmPayPayout->queryBankList($businessType);
+        $list = $this->palmPayPayout->queryBankList($businessType);
+        $cdn = rtrim((string) Config::get('palmpay.bank_logo_cdn_base', ''), '/');
+
+        return array_map(function ($row) use ($cdn) {
+            if (! is_array($row)) {
+                return $row;
+            }
+            $logo = $row['logoUrl'] ?? $row['logo'] ?? $row['bankLogo'] ?? $row['bank_logo'] ?? $row['iconUrl'] ?? $row['icon'] ?? null;
+            if (is_string($logo) && $logo !== '') {
+                if (! str_starts_with($logo, 'http') && $cdn !== '') {
+                    $logo = $cdn.'/'.ltrim($logo, '/');
+                }
+                $row['logoUrl'] = $logo;
+            }
+
+            return $row;
+        }, $list);
     }
 
     /**
@@ -210,7 +226,8 @@ class WithdrawalService
         string $bankCode,
         string $accountNumber,
         string $accountName,
-        ?string $phoneNumber = null
+        ?string $phoneNumber = null,
+        ?string $bankDisplayName = null
     ): array {
         if (! PalmPayConfig::usePalmPayForWithdrawal()) {
             throw new \RuntimeException('PalmPay withdrawals are disabled.');
@@ -235,6 +252,10 @@ class WithdrawalService
             throw new \Exception('Account name is required');
         }
 
+        $payeeBankLabel = trim((string) $bankDisplayName) !== ''
+            ? trim((string) $bankDisplayName)
+            : trim($bankCode);
+
         $fee = $this->getWithdrawalFee();
         $totalAmount = $amount + $fee;
 
@@ -258,8 +279,8 @@ class WithdrawalService
             'fee' => $fee,
             'total_amount' => $totalAmount,
             'reference' => $reference,
-            'description' => "Withdrawal to {$bankCode} - {$normalizedAccount}",
-            'bank_name' => $bankCode,
+            'description' => "Withdrawal to {$payeeBankLabel} - {$normalizedAccount}",
+            'bank_name' => $payeeBankLabel,
             'account_number' => $normalizedAccount,
             'account_name' => trim($accountName),
             'metadata' => [
@@ -267,6 +288,7 @@ class WithdrawalService
                 'provider' => 'palmpay',
                 'palmpay_merchant_order_id' => $palmMerchantOrderId,
                 'palmpay_bank_code' => trim($bankCode),
+                'payee_bank_display_name' => $payeeBankLabel,
             ],
         ]);
 
@@ -311,7 +333,7 @@ class WithdrawalService
             throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
         }
 
-        return DB::transaction(function () use ($userId, $totalAmount, $transaction, $resp, $orderStatus, $orderNo, $bankCode, $normalizedAccount, $accountName, $amount, $fee) {
+        return DB::transaction(function () use ($userId, $totalAmount, $transaction, $resp, $orderStatus, $orderNo, $bankCode, $payeeBankLabel, $normalizedAccount, $accountName, $amount, $fee) {
             $fiatWallet = FiatWallet::where('user_id', $userId)
                 ->where('currency', 'NGN')
                 ->where('country_code', 'NG')
@@ -366,7 +388,7 @@ class WithdrawalService
             return [
                 'transaction' => $transaction->fresh(),
                 'bank_account' => [
-                    'bank_name' => $bankCode,
+                    'bank_name' => $payeeBankLabel,
                     'bank_code' => $bankCode,
                     'account_number' => $normalizedAccount,
                     'account_name' => trim($accountName),

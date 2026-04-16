@@ -142,7 +142,7 @@ class VirtualCardService
                         'card_type' => 'mastercard',
                         'provider' => 'mastercard_api',
                         'provider_status' => $this->extractStatus($response),
-                        'card_color' => in_array($cardColor, ['green', 'brown', 'purple'], true) ? $cardColor : 'green',
+                        'card_color' => in_array($cardColor, $this->allowedCardColors(), true) ? $cardColor : 'green',
                         'currency' => 'USD',
                         'balance' => $this->extractBalance($response),
                         'is_active' => true,
@@ -215,32 +215,80 @@ class VirtualCardService
         }
     }
 
+    /**
+     * Card creation is billed as: admin USD fee × NGN/USD rate (no extra NGN processing line).
+     * Admin: Platform rate `virtual_card` / `creation` — `fee_usd`, `exchange_rate_ngn_per_usd`.
+     */
+    public function getCreationFeeQuote(): array
+    {
+        $feeUsd = $this->resolveCreationFeeUsd();
+        $rate = $this->resolveCreationRateNgnPerUsd();
+        $feeNgn = round($feeUsd * $rate, 2);
+
+        $rFund = $this->platformRates->findVirtualCard('fund');
+        $fundRate = $rFund && $rFund->exchange_rate_ngn_per_usd !== null
+            ? (float) $rFund->exchange_rate_ngn_per_usd
+            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
+        $fundProcessingNgn = $rFund
+            ? (float) $rFund->fixed_fee_ngn
+            : (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
+        $includeLoad = (bool) config('virtual_card.fund_include_provider_load_fee', false);
+        $fundFlatUsd = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
+        $fundPct = $rFund && $rFund->percentage_fee !== null
+            ? (float) $rFund->percentage_fee
+            : (float) config('virtual_card.fund_load_percent', 1.0);
+
+        return [
+            'fee_usd' => $feeUsd,
+            'exchange_rate_ngn_per_usd' => $rate,
+            'fee_ngn' => $feeNgn,
+            'card_program' => [
+                'billspro_spend_fee_percent' => 0.0,
+                'fund_include_provider_load_fee' => $includeLoad,
+                'fund_load_flat_fee_usd' => $fundFlatUsd,
+                'fund_load_percent' => $fundPct,
+                'fund_processing_fee_ngn' => round($fundProcessingNgn, 2),
+                'fund_exchange_rate_ngn_per_usd' => max(0.0001, $fundRate),
+            ],
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function allowedCardColors(): array
+    {
+        return ['green', 'black', 'purple', 'red', 'blue', 'brown'];
+    }
+
+    protected function resolveCreationFeeUsd(): float
+    {
+        $r = $this->platformRates->findVirtualCard('creation');
+        if ($r && $r->fee_usd !== null) {
+            return max(0.0, (float) $r->fee_usd);
+        }
+
+        return max(0.0, (float) config('virtual_card.creation_fee_usd', 3.0));
+    }
+
+    protected function resolveCreationRateNgnPerUsd(): float
+    {
+        $r = $this->platformRates->findVirtualCard('creation');
+        if ($r && $r->exchange_rate_ngn_per_usd !== null) {
+            return max(0.0001, (float) $r->exchange_rate_ngn_per_usd);
+        }
+
+        return max(0.0001, (float) config('virtual_card.usd_to_ngn_rate', 1500.0));
+    }
+
     protected function computeCreationFeeNgn(): float
     {
-        $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
-        $r = $this->platformRates->findVirtualCard('creation');
-        $rate = $r && $r->exchange_rate_ngn_per_usd !== null
-            ? (float) $r->exchange_rate_ngn_per_usd
-            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $processing = $r
-            ? (float) $r->fixed_fee_ngn
-            : (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
-
-        return ($usd * $rate) + $processing;
+        return round($this->resolveCreationFeeUsd() * $this->resolveCreationRateNgnPerUsd(), 2);
     }
 
     protected function computeCreationFeeUsd(): float
     {
-        $usd = (float) config('virtual_card.creation_fee_usd', 3.0);
-        $r = $this->platformRates->findVirtualCard('creation');
-        $rate = $r && $r->exchange_rate_ngn_per_usd !== null
-            ? (float) $r->exchange_rate_ngn_per_usd
-            : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $processingNgn = $r
-            ? (float) $r->fixed_fee_ngn
-            : (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
-
-        return $usd + ($processingNgn / max($rate, 0.0001));
+        return $this->resolveCreationFeeUsd();
     }
 
     /**
@@ -278,6 +326,8 @@ class VirtualCardService
 
         $totalUsd = round($principalUsd + $loadFeeUsd, 8);
 
+        $cardFundingFeeUsdDisplay = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
+
         $out = [
             'principal_usd' => round($principalUsd, 8),
             'load_fee_usd' => round($loadFeeUsd, 8),
@@ -286,6 +336,10 @@ class VirtualCardService
             'exchange_rate_ngn_per_usd' => $rate,
             'payment_wallet_type' => $paymentWalletType,
             'fund_include_provider_load_fee' => $includeLoad,
+            /** Shown in apps as “card funding fee” (USD only line); may differ from `load_fee_usd` when load fee bundle is off. */
+            'card_funding_fee_usd' => $cardFundingFeeUsdDisplay,
+            'billspro_transaction_fee_percent' => 0.0,
+            'billspro_transaction_fee_ngn' => 0.0,
         ];
 
         if ($paymentWalletType === 'naira_wallet') {
@@ -439,6 +493,12 @@ class VirtualCardService
                         'principal_usd' => $principalUsd,
                         'wallet_charge' => $charges,
                         'payment_wallet_type' => $paymentWalletType,
+                        'payment_wallet_currency' => $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD',
+                        'exchange_rate_ngn_per_usd' => $rate,
+                        'card_funding_fee_usd' => (float) ($charges['card_funding_fee_usd'] ?? config('virtual_card.fund_load_flat_fee_usd', 1.0)),
+                        'billspro_transaction_fee_percent' => 0.0,
+                        'total_charge_ngn' => $paymentWalletType === 'naira_wallet' ? (float) ($charges['charge_ngn'] ?? 0) : null,
+                        'total_charge_usd' => $paymentWalletType === 'crypto_wallet' ? (float) ($charges['charge_usd'] ?? 0) : null,
                         'provider_payload' => $response,
                     ],
                 ]);

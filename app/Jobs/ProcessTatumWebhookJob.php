@@ -575,8 +575,17 @@ class ProcessTatumWebhookJob implements ShouldQueue
 
             $currentAvailable = (float) ($account->available_balance ?? '0');
             $currentAccount = (float) ($account->account_balance ?? '0');
-            $newAvailable = $currentAvailable + $amount;
-            $newAccount = $currentAccount + $amount;
+
+            $settlement = app(CryptoService::class)->computeOnChainDepositSettlement(
+                $amount,
+                $currency,
+                (string) $account->blockchain
+            );
+            $netCredit = (float) $settlement['net_crypto'];
+            $feeCrypto = (float) $settlement['fee_crypto'];
+
+            $newAvailable = $currentAvailable + $netCredit;
+            $newAccount = $currentAccount + $netCredit;
 
             $account->available_balance = (string) $newAvailable;
             $account->account_balance = (string) $newAccount;
@@ -589,8 +598,9 @@ class ProcessTatumWebhookJob implements ShouldQueue
                 ->first();
 
             $rate = $walletCurrency ? $walletCurrency->usdPerUnitForDisplay() : 1.0;
-            $amountUsd = $amount * $rate;
-            $amountNgn = $amountUsd * (float) config('crypto.ngn_per_usd', CryptoService::DEFAULT_EXCHANGE_RATE);
+            $grossUsd = $amount * $rate;
+            $netUsd = $netCredit * $rate;
+            $amountNgn = $netUsd * (float) config('crypto.ngn_per_usd', CryptoService::DEFAULT_EXCHANGE_RATE);
 
             $tx = Transaction::query()->create([
                 'user_id' => $userId,
@@ -599,11 +609,11 @@ class ProcessTatumWebhookJob implements ShouldQueue
                 'category' => 'on_chain_receive',
                 'status' => 'completed',
                 'currency' => $currency,
-                'amount' => $amount,
-                'fee' => 0,
-                'total_amount' => $amount,
+                'amount' => $netCredit,
+                'fee' => $feeCrypto,
+                'total_amount' => $netCredit,
                 'reference' => Transaction::generateTransactionId(),
-                'description' => "On-chain deposit {$amount} {$currency}",
+                'description' => "On-chain deposit {$netCredit} {$currency}".($feeCrypto > 0 ? ' (after processing fee)' : ''),
                 'metadata' => [
                     'blockchain' => $account->blockchain,
                     'network' => $baseBlockchain,
@@ -612,7 +622,11 @@ class ProcessTatumWebhookJob implements ShouldQueue
                     'to_address' => $toAddress,
                     'subscription_type' => $subscriptionType,
                     'virtual_account_id' => $account->id,
-                    'amount_usd' => round($amountUsd, 8),
+                    'gross_amount_crypto' => $amount,
+                    'processing_fee_crypto' => $feeCrypto,
+                    'processing_fee_usd' => $settlement['fee_usd'],
+                    'amount_usd' => round($netUsd, 8),
+                    'gross_amount_usd' => round($grossUsd, 8),
                     'amount_ngn' => round($amountNgn, 2),
                     'received_asset_log_index' => $logIndex,
                 ],

@@ -193,7 +193,8 @@ class CryptoController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'Failed to get exchange rate', 400);
             }
 
-            return ResponseHelper::success($result['data'], 'Exchange rate retrieved successfully.');
+            return ResponseHelper::success($result['data'], 'Exchange rate retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
         } catch (\Exception $e) {
             Log::error('Get exchange rate error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -347,6 +348,39 @@ class CryptoController extends Controller
             ]);
 
             return ResponseHelper::serverError('An error occurred while processing transaction. Please try again.');
+        }
+    }
+
+    /**
+     * Preview send / withdrawal processing fee (USD-based admin rate or default).
+     */
+    #[OA\Get(path: '/api/crypto/send/fee-preview', summary: 'Preview send processing fee', security: [['sanctum' => []]], tags: ['Crypto'])]
+    public function previewSendFee(Request $request): JsonResponse
+    {
+        try {
+            $data = $request->validate([
+                'currency' => 'required|string',
+                'blockchain' => 'required|string',
+                'amount' => 'nullable|numeric|min:0',
+            ]);
+            $amount = (float) ($data['amount'] ?? 0);
+            $result = $this->cryptoService->previewSendProcessingFee(
+                $data['currency'],
+                $data['blockchain'],
+                $amount
+            );
+
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Failed to quote fee', 400);
+            }
+
+            return ResponseHelper::success($result['data'], 'Fee preview.');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return ResponseHelper::validationError($e->errors());
+        } catch (\Exception $e) {
+            Log::error('Send fee preview error: '.$e->getMessage());
+
+            return ResponseHelper::serverError('Unable to load fee preview.');
         }
     }
 

@@ -337,6 +337,14 @@ class TransactionService
     }
 
     /**
+     * Public helper for API formatting (same rules as aggregated list).
+     */
+    public function walletTypeFor(Transaction $transaction): string
+    {
+        return $this->determineWalletType($transaction);
+    }
+
+    /**
      * Determine wallet type from transaction
      */
     protected function determineWalletType(Transaction $transaction): string

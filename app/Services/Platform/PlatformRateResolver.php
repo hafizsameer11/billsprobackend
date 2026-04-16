@@ -71,6 +71,16 @@ class PlatformRateResolver
         return null;
     }
 
+    /**
+     * On-chain crypto out (app “Send”) uses the same admin row as withdrawal.
+     * Falls back to legacy `send` service_key if present.
+     */
+    public function findCryptoSendOrWithdrawal(?string $cryptoAsset = null, ?string $networkKey = null): ?PlatformRate
+    {
+        return $this->findCrypto('withdrawal', $cryptoAsset, $networkKey)
+            ?? $this->findCrypto('send', $cryptoAsset, $networkKey);
+    }
+
     public function findVirtualCard(string $serviceKey): ?PlatformRate
     {
         return PlatformRate::query()

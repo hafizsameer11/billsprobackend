@@ -5,11 +5,27 @@ namespace App\Http\Controllers\Api;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Models\Deposit;
+use App\Services\Deposit\DepositFeePreviewService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminDepositController extends Controller
 {
+    public function __construct(
+        protected DepositFeePreviewService $depositFeePreview
+    ) {}
+
+    /**
+     * Same fee logic as GET /api/deposit/fee (for admin UI copy).
+     */
+    public function feeQuote(): JsonResponse
+    {
+        return ResponseHelper::success(
+            $this->depositFeePreview->quoteForAuthenticatedDepositFlow(),
+            'Deposit fee quote.'
+        );
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = min(100, max(1, (int) $request->query('per_page', 25)));

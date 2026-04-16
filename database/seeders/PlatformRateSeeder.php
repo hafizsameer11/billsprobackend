@@ -10,7 +10,7 @@ class PlatformRateSeeder extends Seeder
     public function run(): void
     {
         $usdToNgn = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $creationProc = (float) config('virtual_card.creation_processing_fee_ngn', 500.0);
+        $creationFeeUsd = (float) config('virtual_card.creation_fee_usd', 3.0);
         $fundProc = (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
         $fundPct = (float) config('virtual_card.fund_load_percent', 1.0);
 
@@ -56,8 +56,9 @@ class PlatformRateSeeder extends Seeder
                 'network_key' => null,
                 'exchange_rate_ngn_per_usd' => null,
                 'fixed_fee_ngn' => 0,
-                'percentage_fee' => 1.0,
+                'percentage_fee' => null,
                 'min_fee_ngn' => null,
+                'fee_usd' => null,
             ],
             [
                 'category' => 'crypto',
@@ -67,12 +68,13 @@ class PlatformRateSeeder extends Seeder
                 'network_key' => null,
                 'exchange_rate_ngn_per_usd' => null,
                 'fixed_fee_ngn' => 0,
-                'percentage_fee' => 1.0,
+                'percentage_fee' => null,
                 'min_fee_ngn' => null,
+                'fee_usd' => null,
             ],
             [
                 'category' => 'crypto',
-                'service_key' => 'send',
+                'service_key' => 'withdrawal',
                 'sub_service_key' => null,
                 'crypto_asset' => null,
                 'network_key' => null,
@@ -80,6 +82,7 @@ class PlatformRateSeeder extends Seeder
                 'fixed_fee_ngn' => 0,
                 'percentage_fee' => null,
                 'min_fee_ngn' => null,
+                'fee_usd' => 3.0,
             ],
             [
                 'category' => 'virtual_card',
@@ -88,9 +91,10 @@ class PlatformRateSeeder extends Seeder
                 'crypto_asset' => null,
                 'network_key' => null,
                 'exchange_rate_ngn_per_usd' => $usdToNgn,
-                'fixed_fee_ngn' => $creationProc,
+                'fixed_fee_ngn' => 0,
                 'percentage_fee' => null,
                 'min_fee_ngn' => null,
+                'fee_usd' => $creationFeeUsd,
             ],
             [
                 'category' => 'virtual_card',

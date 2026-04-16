@@ -8,8 +8,10 @@ use App\Models\SupportTicket;
 use App\Models\SupportTicketMessage;
 use App\Models\User;
 use App\Services\Admin\AdminAuditService;
+use App\Services\Chat\ChatService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class AdminSupportTicketController extends Controller
 {
@@ -128,6 +130,19 @@ class AdminSupportTicketController extends Controller
 
         if ($supportTicket->status === 'open') {
             $supportTicket->update(['status' => 'in_progress']);
+        }
+
+        if ($supportTicket->chat_session_id) {
+            try {
+                app(ChatService::class)->sendMessage(
+                    (int) $supportTicket->chat_session_id,
+                    (int) $request->user()->id,
+                    $data['body'],
+                    'admin'
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Admin reply could not be mirrored to in-app live chat: '.$e->getMessage());
+            }
         }
 
         $this->audit->log((int) $request->user()->id, 'support_ticket.message', $supportTicket, [

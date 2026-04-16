@@ -55,4 +55,9 @@ class ChatSession extends Model
     {
         return $this->hasOne(ChatMessage::class)->latestOfMany();
     }
+
+    public function supportTicket(): HasOne
+    {
+        return $this->hasOne(SupportTicket::class, 'chat_session_id');
+    }
 }

@@ -130,6 +130,11 @@ class AdminBalanceAdjustmentService
             $va->save();
 
             $type = $isDebit ? 'admin_debit' : 'admin_credit';
+            $reasonLower = strtolower($reason);
+            $isGasTopUp = ! $isDebit && str_contains($reasonLower, 'gas');
+            $description = $isGasTopUp
+                ? 'Platform gas fee top-up by Bills Pro — covers network fees for your wallet.'
+                : 'Admin crypto '.($isDebit ? 'debit' : 'credit');
             $tx = Transaction::create([
                 'user_id' => $va->user_id,
                 'transaction_id' => Transaction::generateTransactionId(),
@@ -141,7 +146,7 @@ class AdminBalanceAdjustmentService
                 'fee' => '0',
                 'total_amount' => (string) $delta,
                 'reference' => $reference ?? ('ADJ-VA-'.$va->id.'-'.time()),
-                'description' => 'Admin crypto '.($isDebit ? 'debit' : 'credit'),
+                'description' => $description,
                 'metadata' => [
                     'admin_user_id' => $adminUserId,
                     'reason' => $reason,
@@ -149,6 +154,7 @@ class AdminBalanceAdjustmentService
                     'blockchain' => $va->blockchain,
                     'before_available_balance' => (string) $beforeAvail,
                     'after_available_balance' => (string) $afterAvail,
+                    'is_gas_topup' => $isGasTopUp,
                 ],
                 'completed_at' => now(),
             ]);

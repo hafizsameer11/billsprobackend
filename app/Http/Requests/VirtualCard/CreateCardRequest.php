@@ -27,7 +27,7 @@ class CreateCardRequest extends FormRequest
             'phone' => 'nullable|string|max:20',
             'countrycode' => 'nullable|string|max:5',
             'postalcode' => 'nullable|string|max:20',
-            'card_color' => 'nullable|string|in:green,brown,purple',
+            'card_color' => 'nullable|string|in:green,black,purple,red,blue,brown',
             'card_type' => 'nullable|string|in:mastercard,visa',
             'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
             'payment_wallet_currency' => 'nullable|string|max:10',

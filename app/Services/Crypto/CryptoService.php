@@ -5,6 +5,7 @@ namespace App\Services\Crypto;
 use App\Models\FiatWallet;
 use App\Models\MasterWallet;
 use App\Models\MasterWalletTransaction;
+use App\Models\PlatformRate;
 use App\Models\Transaction;
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
@@ -23,12 +24,8 @@ class CryptoService
 
     protected WalletService $walletService;
 
-    // Transaction fees (in USD)
+    /** Default send/withdraw processing fee (USD) when no admin `platform_rates` row exists. */
     const SEND_FEE_USD = 3.0;
-
-    const BUY_FEE_PERCENT = 0.01; // 1%
-
-    const SELL_FEE_PERCENT = 0.01; // 1%
 
     /** @deprecated Use config('crypto.ngn_per_usd') */
     const DEFAULT_EXCHANGE_RATE = 1500.0;
@@ -49,6 +46,97 @@ class CryptoService
         $this->cryptoWalletService = $cryptoWalletService;
         $this->transactionService = $transactionService;
         $this->walletService = $walletService;
+    }
+
+    /**
+     * On-chain receive / send-out processing: `fee_usd` (flat) + `percentage_fee` of the **USD notional**
+     * of the crypto amount. Crypto admin rows use USD only (legacy `fixed_fee_ngn` is ignored here).
+     *
+     * @return array{fee_usd: float, fee_crypto: float, net_crypto: float, gross_crypto: float}
+     */
+    protected function computeUsdBasedCryptoFee(?PlatformRate $row, float $grossCrypto, float $usdPerUnit): array
+    {
+        $usdPer = max((float) $usdPerUnit, 0.0000000001);
+        $gross = max(0.0, (float) $grossCrypto);
+        $amountUsd = $gross * $usdPer;
+        $feeUsd = 0.0;
+        if ($row) {
+            $fixed = $row->fee_usd !== null ? (float) $row->fee_usd : 0.0;
+            $pct = $row->percentage_fee !== null ? (float) $row->percentage_fee / 100.0 : 0.0;
+            $feeUsd = max(0.0, $fixed + $amountUsd * $pct);
+        }
+        $feeCrypto = $feeUsd / $usdPer;
+        if ($feeCrypto > $gross) {
+            $feeCrypto = $gross;
+            $feeUsd = $feeCrypto * $usdPer;
+        }
+        $net = max(0.0, $gross - $feeCrypto);
+
+        return [
+            'fee_usd' => round($feeUsd, 8),
+            'fee_crypto' => round($feeCrypto, 12),
+            'net_crypto' => round($net, 12),
+            'gross_crypto' => $gross,
+        ];
+    }
+
+    /**
+     * Apply admin deposit processing fee to an on-chain incoming amount (gross → net credit).
+     *
+     * @return array{fee_usd: float, fee_crypto: float, net_crypto: float, gross_crypto: float}
+     */
+    public function computeOnChainDepositSettlement(float $grossCrypto, string $currency, string $blockchain): array
+    {
+        $wc = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+        $usdPer = $wc ? (float) $wc->usdPerUnitForDisplay() : 1.0;
+        $row = $this->platformRates->findCrypto('deposit', $currency, $blockchain);
+
+        return $this->computeUsdBasedCryptoFee($row, $grossCrypto, $usdPer);
+    }
+
+    /**
+     * Quote send/withdraw processing fee (for UI). Uses admin withdrawal rate or {@see SEND_FEE_USD} if unset.
+     *
+     * @return array{success: bool, data?: array<string, mixed>, message?: string}
+     */
+    public function previewSendProcessingFee(string $currency, string $blockchain, float $amountCrypto): array
+    {
+        if ($amountCrypto < 0) {
+            return ['success' => false, 'message' => 'Invalid amount'];
+        }
+        $wc = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+        $rate = $wc ? (float) $wc->usdPerUnitForSell() : 1.0;
+        if ($rate <= 0) {
+            $rate = 1.0;
+        }
+        $row = $this->platformRates->findCryptoSendOrWithdrawal($currency, $blockchain);
+        if ($row === null) {
+            $feeUsd = self::SEND_FEE_USD;
+            $feeCrypto = $feeUsd / $rate;
+
+            return [
+                'success' => true,
+                'data' => [
+                    'fee_usd' => round($feeUsd, 8),
+                    'fee_crypto' => round($feeCrypto, 12),
+                    'total_crypto_debit' => round($amountCrypto + $feeCrypto, 12),
+                    'send_amount_crypto' => $amountCrypto,
+                    'uses_default_fee' => true,
+                ],
+            ];
+        }
+        $pack = $this->computeUsdBasedCryptoFee($row, $amountCrypto, $rate);
+
+        return [
+            'success' => true,
+            'data' => [
+                'fee_usd' => $pack['fee_usd'],
+                'fee_crypto' => $pack['fee_crypto'],
+                'total_crypto_debit' => round($amountCrypto + $pack['fee_crypto'], 12),
+                'send_amount_crypto' => $amountCrypto,
+                'uses_default_fee' => false,
+            ],
+        ];
     }
 
     /**
@@ -343,6 +431,23 @@ class CryptoService
                 ? $walletCurrency->usdPerUnitForSell()
                 : (float) ($walletCurrency->rate ?? 0));
 
+        $ngnPerUsd = $this->ngnPerUsd();
+
+        // Admin overrides for buy/sell: `exchange_rate_ngn_per_usd` = NGN charged (buy) or paid (sell) per 1 whole crypto unit.
+        if ($isBuyWithNgn) {
+            $buyRow = $this->platformRates->findCrypto('buy', $cryptoCurrency, $blockchain);
+            if ($buyRow && $buyRow->exchange_rate_ngn_per_usd !== null && (float) $buyRow->exchange_rate_ngn_per_usd > 0) {
+                $ngnPerCrypto = (float) $buyRow->exchange_rate_ngn_per_usd;
+                $rateUsdPerCrypto = $ngnPerCrypto / max($ngnPerUsd, 0.0000001);
+            }
+        } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
+            $sellRow = $this->platformRates->findCrypto('sell', $cryptoCurrency, $blockchain);
+            if ($sellRow && $sellRow->exchange_rate_ngn_per_usd !== null && (float) $sellRow->exchange_rate_ngn_per_usd > 0) {
+                $ngnPerCrypto = (float) $sellRow->exchange_rate_ngn_per_usd;
+                $rateUsdPerCrypto = $ngnPerCrypto / max($ngnPerUsd, 0.0000001);
+            }
+        }
+
         if ($rateUsdPerCrypto <= 0) {
             return [
                 'success' => false,
@@ -350,7 +455,6 @@ class CryptoService
             ];
         }
 
-        $ngnPerUsd = $this->ngnPerUsd();
         $exchangeRate = 1.0;
 
         if ($fromCurrency === 'NGN' && $toCurrency !== 'NGN') {
@@ -425,18 +529,6 @@ class CryptoService
         $cryptoAmount = $rateData['data']['crypto_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
 
-        $feeRow = $this->platformRates->findCrypto('buy', $currency, $blockchain);
-        $feePercent = $feeRow && $feeRow->percentage_fee !== null
-            ? (float) $feeRow->percentage_fee / 100.0
-            : self::BUY_FEE_PERCENT;
-        $feeInCrypto = $cryptoAmount * $feePercent;
-        $totalCryptoAmount = $cryptoAmount + $feeInCrypto;
-
-        // Convert fee to payment currency
-        $feeInPaymentCurrency = $feeInCrypto / $exchangeRate;
-        $fixedNgn = $feeRow ? (float) $feeRow->fixed_fee_ngn : 0.0;
-        $totalAmount = $amount + $feeInPaymentCurrency + $fixedNgn;
-
         return [
             'success' => true,
             'data' => [
@@ -446,11 +538,11 @@ class CryptoService
                 'amount' => $amount,
                 'payment_method' => $paymentMethod,
                 'crypto_amount' => $cryptoAmount,
-                'fee_percent' => $feePercent * 100,
-                'fee_in_crypto' => $feeInCrypto,
-                'fee_in_payment_currency' => $feeInPaymentCurrency,
-                'total_crypto_amount' => $totalCryptoAmount,
-                'total_amount' => $totalAmount,
+                'fee_percent' => 0.0,
+                'fee_in_crypto' => 0.0,
+                'fee_in_payment_currency' => 0.0,
+                'total_crypto_amount' => $cryptoAmount,
+                'total_amount' => $amount,
                 'exchange_rate' => $exchangeRate,
                 'rate' => $rateData['data']['rate'],
             ],
@@ -496,7 +588,7 @@ class CryptoService
                 ];
             }
 
-            if ($fiatWallet->balance < $previewData['total_amount']) {
+            if ($fiatWallet->balance < $previewData['amount']) {
                 return [
                     'success' => false,
                     'message' => 'Insufficient balance',
@@ -558,7 +650,7 @@ class CryptoService
                 ];
             }
 
-            $fiatWallet->decrement('balance', $previewData['total_amount']);
+            $fiatWallet->decrement('balance', $previewData['amount']);
 
             if ($account) {
                 // Manually update balances since they're stored as strings
@@ -576,6 +668,8 @@ class CryptoService
                 $account->load('walletCurrency.exchangeRate');
             }
 
+            $walletCurrencyMeta = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+
             // Create transaction
             $transaction = Transaction::create([
                 'user_id' => $userId,
@@ -585,13 +679,14 @@ class CryptoService
                 'status' => 'completed',
                 'currency' => $currency,
                 'amount' => $previewData['crypto_amount'],
-                'fee' => $previewData['fee_in_crypto'],
-                'total_amount' => $previewData['total_crypto_amount'],
+                'fee' => 0,
+                'total_amount' => $previewData['crypto_amount'],
                 'reference' => 'BUY'.strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
                 'description' => "Buy {$previewData['crypto_amount']} {$currency}",
                 'metadata' => [
                     'blockchain' => $blockchain,
                     'network' => $blockchain,
+                    'blockchain_name' => $walletCurrencyMeta?->blockchain_name,
                     'payment_method' => $paymentMethod,
                     'payment_amount' => $previewData['amount'],
                     'payment_currency' => $paymentMethod === 'naira' ? 'NGN' : 'USD',
@@ -680,16 +775,6 @@ class CryptoService
         $ngnAmount = $rateData['data']['fiat_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
 
-        $feeRow = $this->platformRates->findCrypto('sell', $currency, $blockchain);
-        $feePercent = $feeRow && $feeRow->percentage_fee !== null
-            ? (float) $feeRow->percentage_fee / 100.0
-            : self::SELL_FEE_PERCENT;
-        $feeInCrypto = $amount * $feePercent;
-        $feeInNgn = $feeInCrypto * $exchangeRate;
-        $fixedNgn = $feeRow ? (float) $feeRow->fixed_fee_ngn : 0.0;
-        $totalCryptoAmount = $amount + $feeInCrypto;
-        $amountToReceive = $ngnAmount - $feeInNgn - $fixedNgn;
-
         return [
             'success' => true,
             'data' => [
@@ -697,12 +782,12 @@ class CryptoService
                 'blockchain' => $blockchain,
                 'network' => $blockchain,
                 'crypto_amount' => $amount,
-                'fee_percent' => $feePercent * 100,
-                'fee_in_crypto' => $feeInCrypto,
-                'fee_in_ngn' => $feeInNgn,
-                'total_crypto_amount' => $totalCryptoAmount,
+                'fee_percent' => 0.0,
+                'fee_in_crypto' => 0.0,
+                'fee_in_ngn' => 0.0,
+                'total_crypto_amount' => $amount,
                 'ngn_amount' => $ngnAmount,
-                'amount_to_receive' => $amountToReceive,
+                'amount_to_receive' => $ngnAmount,
                 'exchange_rate' => $exchangeRate,
                 'rate' => $rateData['data']['rate'],
             ],
@@ -748,7 +833,7 @@ class CryptoService
 
             // Check balance inside transaction with lock
             $currentAvailableBalance = (float) ($account->available_balance ?? '0');
-            if ($currentAvailableBalance < $previewData['total_crypto_amount']) {
+            if ($currentAvailableBalance < $previewData['crypto_amount']) {
                 return [
                     'success' => false,
                     'message' => 'Insufficient balance',
@@ -775,8 +860,8 @@ class CryptoService
 
             // Manually update balances since they're stored as strings
             $currentAccountBalance = (float) ($account->account_balance ?? '0');
-            $newAvailableBalance = $currentAvailableBalance - $previewData['total_crypto_amount'];
-            $newAccountBalance = $currentAccountBalance - $previewData['total_crypto_amount'];
+            $newAvailableBalance = $currentAvailableBalance - $previewData['crypto_amount'];
+            $newAccountBalance = $currentAccountBalance - $previewData['crypto_amount'];
 
             $account->available_balance = (string) $newAvailableBalance;
             $account->account_balance = (string) $newAccountBalance;
@@ -797,8 +882,8 @@ class CryptoService
                 'status' => 'completed',
                 'currency' => $currency,
                 'amount' => $previewData['crypto_amount'],
-                'fee' => $previewData['fee_in_crypto'],
-                'total_amount' => $previewData['total_crypto_amount'],
+                'fee' => 0,
+                'total_amount' => $previewData['crypto_amount'],
                 'reference' => 'SELL'.strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
                 'description' => "Sell {$previewData['crypto_amount']} {$currency}",
                 'metadata' => [
@@ -854,17 +939,12 @@ class CryptoService
         if ($rate <= 0) {
             $rate = 1.0;
         }
-        $feeRow = $this->platformRates->findCrypto('send', $currency, $blockchain);
-        $ngnPerUsd = (float) config('crypto.ngn_per_usd', self::DEFAULT_EXCHANGE_RATE);
-        $feeInCrypto = self::SEND_FEE_USD / $rate;
-        if ($feeRow && ($feeRow->percentage_fee !== null || (float) $feeRow->fixed_fee_ngn > 0)) {
-            $feeInCrypto = 0.0;
-            if ($feeRow->percentage_fee !== null) {
-                $feeInCrypto += $amount * ((float) $feeRow->percentage_fee / 100.0);
-            }
-            if ((float) $feeRow->fixed_fee_ngn > 0) {
-                $feeInCrypto += ((float) $feeRow->fixed_fee_ngn / max($ngnPerUsd, 0.0001)) / max($rate, 0.0000001);
-            }
+        $feeRow = $this->platformRates->findCryptoSendOrWithdrawal($currency, $blockchain);
+        if ($feeRow === null) {
+            $feeInCrypto = self::SEND_FEE_USD / max($rate, 0.0000001);
+        } else {
+            $pack = $this->computeUsdBasedCryptoFee($feeRow, $amount, $rate);
+            $feeInCrypto = $pack['fee_crypto'];
         }
         $totalAmount = $amount + $feeInCrypto;
 
