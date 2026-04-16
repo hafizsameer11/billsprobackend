@@ -65,6 +65,7 @@ class WithdrawalService
             return BankAccount::create([
                 'user_id' => $userId,
                 'bank_name' => $data['bank_name'],
+                'bank_code' => $data['bank_code'] ?? null,
                 'account_number' => $data['account_number'],
                 'account_name' => $data['account_name'],
                 'currency' => $data['currency'] ?? 'NGN',
