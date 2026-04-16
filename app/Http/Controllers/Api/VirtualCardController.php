@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Helpers\NotificationHelper;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
@@ -166,6 +167,18 @@ class VirtualCardController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400);
             }
 
+            try {
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Created',
+                    'Your virtual card was created successfully.',
+                    ['action' => 'create_card']
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card create notification failed: '.$e->getMessage());
+            }
+
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual card created successfully.');
         } catch (\Exception $e) {
             Log::error('Create virtual card error: '.$e->getMessage(), [
@@ -242,6 +255,19 @@ class VirtualCardController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400);
             }
 
+            try {
+                $amount = $request->validated()['amount'] ?? null;
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Funded',
+                    $amount ? "Your virtual card was funded with USD {$amount}." : 'Your virtual card was funded successfully.',
+                    ['action' => 'fund_card', 'amount' => $amount]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card fund notification failed: '.$e->getMessage());
+            }
+
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
         } catch (\Exception $e) {
             Log::error('Fund card error: '.$e->getMessage(), [
@@ -271,6 +297,19 @@ class VirtualCardController extends Controller
 
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Withdrawal failed', 400);
+            }
+
+            try {
+                $amount = $request->validated()['amount'] ?? null;
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Withdrawal',
+                    $amount ? "USD {$amount} was withdrawn from your virtual card." : 'Withdrawal from virtual card was successful.',
+                    ['action' => 'withdraw_from_card', 'amount' => $amount]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card withdraw notification failed: '.$e->getMessage());
             }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal successful.');
@@ -471,6 +510,18 @@ class VirtualCardController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'Unable to freeze card', $result['status'] ?? 400);
             }
 
+            try {
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Frozen',
+                    'Your virtual card has been frozen.',
+                    ['action' => 'freeze_card']
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card freeze notification failed: '.$e->getMessage());
+            }
+
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card frozen successfully.');
         } catch (\Exception $e) {
             Log::error('Freeze card error: '.$e->getMessage(), [
@@ -499,6 +550,18 @@ class VirtualCardController extends Controller
                 return ResponseHelper::error($result['message'] ?? 'Unable to unfreeze card', $result['status'] ?? 400);
             }
 
+            try {
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Unfrozen',
+                    'Your virtual card has been unfrozen and is active again.',
+                    ['action' => 'unfreeze_card']
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card unfreeze notification failed: '.$e->getMessage());
+            }
+
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card unfrozen successfully.');
         } catch (\Exception $e) {
             Log::error('Unfreeze card error: '.$e->getMessage(), [
@@ -525,6 +588,18 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Card termination failed', 400);
+            }
+
+            try {
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Terminated',
+                    'Your virtual card has been terminated successfully.',
+                    ['action' => 'terminate_card']
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Virtual card terminate notification failed: '.$e->getMessage());
             }
 
             return ResponseHelper::success($result['data'], $result['message'] ?? 'Card terminated successfully.');

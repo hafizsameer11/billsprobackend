@@ -2,6 +2,7 @@
 
 namespace App\Services\PalmPay;
 
+use App\Helpers\NotificationHelper;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\PalmPayDepositOrder;
@@ -254,6 +255,23 @@ class PalmPayDepositService
                 'order_status' => 2,
                 'virtual_account' => array_merge($order->virtual_account ?? [], $virtualAccountMeta),
             ]);
+
+            $user = User::find($userId);
+            if ($user) {
+                NotificationHelper::createTransactionNotification(
+                    $user,
+                    'deposit',
+                    'Wallet Top Up Successful',
+                    "Your {$currency} wallet was credited with {$currency} {$creditAmount}.",
+                    [
+                        'deposit_reference' => $deposit->deposit_reference,
+                        'amount' => (float) $creditAmount,
+                        'currency' => $currency,
+                        'transaction_id' => $transaction->transaction_id,
+                        'provider' => 'palmpay',
+                    ]
+                );
+            }
         }, 5);
     }
 

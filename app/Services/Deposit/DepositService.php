@@ -2,10 +2,12 @@
 
 namespace App\Services\Deposit;
 
+use App\Helpers\NotificationHelper;
 use App\Models\BankAccount;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Services\Platform\PlatformRateResolver;
 use Illuminate\Support\Facades\DB;
 
@@ -153,6 +155,22 @@ class DepositService
                     'locked_balance' => 0,
                     'is_active' => true,
                 ]);
+            }
+
+            $user = User::find($userId);
+            if ($user) {
+                NotificationHelper::createTransactionNotification(
+                    $user,
+                    'deposit',
+                    'Wallet Top Up Successful',
+                    "Your {$deposit->currency} wallet was credited with {$deposit->currency} {$deposit->amount}.",
+                    [
+                        'deposit_reference' => $deposit->deposit_reference,
+                        'amount' => $deposit->amount,
+                        'currency' => $deposit->currency,
+                        'transaction_id' => $transaction->transaction_id,
+                    ]
+                );
             }
 
             return [

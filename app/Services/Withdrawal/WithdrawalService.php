@@ -2,6 +2,7 @@
 
 namespace App\Services\Withdrawal;
 
+use App\Helpers\NotificationHelper;
 use App\Models\BankAccount;
 use App\Models\FiatWallet;
 use App\Models\Transaction;
@@ -342,6 +343,26 @@ class WithdrawalService
                 'metadata' => $meta,
             ]);
 
+            $user = User::find($userId);
+            if ($user) {
+                $statusText = $orderStatus === 2 ? 'successful' : 'submitted';
+                NotificationHelper::createTransactionNotification(
+                    $user,
+                    'withdrawal',
+                    'Withdrawal Update',
+                    "Your withdrawal of NGN {$amount} to {$normalizedAccount} has been {$statusText}.",
+                    [
+                        'transaction_id' => $transaction->transaction_id,
+                        'amount' => $amount,
+                        'fee' => $fee,
+                        'bank_code' => $bankCode,
+                        'account_number' => $normalizedAccount,
+                        'status' => $orderStatus === 2 ? 'completed' : 'pending',
+                        'provider' => 'palmpay',
+                    ]
+                );
+            }
+
             return [
                 'transaction' => $transaction->fresh(),
                 'bank_account' => [
@@ -449,6 +470,22 @@ class WithdrawalService
                 'fee' => $fee,
                 'total_amount' => $totalAmount,
             ]);
+
+            NotificationHelper::createTransactionNotification(
+                $user,
+                'withdrawal',
+                'Withdrawal Successful',
+                "Your withdrawal of NGN {$amount} to {$bankAccount->account_number} was successful.",
+                [
+                    'transaction_id' => $transaction->transaction_id,
+                    'amount' => $amount,
+                    'fee' => $fee,
+                    'bank_name' => $bankAccount->bank_name,
+                    'account_number' => $bankAccount->account_number,
+                    'status' => 'completed',
+                    'provider' => 'internal',
+                ]
+            );
 
             return [
                 'transaction' => $transaction,
@@ -605,6 +642,26 @@ class WithdrawalService
                 'transaction_id' => $transaction->transaction_id,
                 'order_status' => $orderStatus,
             ]);
+
+            $user = User::find($userId);
+            if ($user) {
+                $statusText = $orderStatus === 2 ? 'successful' : 'submitted';
+                NotificationHelper::createTransactionNotification(
+                    $user,
+                    'withdrawal',
+                    'Withdrawal Update',
+                    "Your withdrawal of NGN {$amount} to {$bankAccount->account_number} has been {$statusText}.",
+                    [
+                        'transaction_id' => $transaction->transaction_id,
+                        'amount' => $amount,
+                        'fee' => $fee,
+                        'bank_name' => $bankAccount->bank_name,
+                        'account_number' => $bankAccount->account_number,
+                        'status' => $orderStatus === 2 ? 'completed' : 'pending',
+                        'provider' => 'palmpay',
+                    ]
+                );
+            }
 
             return [
                 'transaction' => $transaction->fresh(),

@@ -66,6 +66,14 @@ class AuthService
         // Send OTP to email
         $otpResult = $this->otpService->sendOtp($user->email, null, 'email');
 
+        try {
+            NotificationHelper::createWelcomeNotification($user);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to create welcome notification: '.$e->getMessage(), [
+                'user_id' => $user->id,
+            ]);
+        }
+
         return [
             'success' => true,
             'message' => 'Registration successful. Please verify your email.',

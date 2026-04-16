@@ -2,6 +2,7 @@
 
 namespace App\Services\BillPayment;
 
+use App\Helpers\NotificationHelper;
 use App\Models\BillPaymentCategory;
 use App\Models\BillPaymentProvider;
 use App\Models\BillPaymentPlan;
@@ -480,6 +481,23 @@ class BillPaymentService
                 $rechargeToken = $this->generateRechargeToken();
                 $metadata['rechargeToken'] = $rechargeToken;
                 $transaction->update(['metadata' => $metadata]);
+            }
+
+            $user = $transaction->user;
+            if ($user) {
+                $categoryName = $metadata['categoryName'] ?? 'bill';
+                NotificationHelper::createTransactionNotification(
+                    $user,
+                    'bill_payment',
+                    'Bill Payment Successful',
+                    "Your {$categoryName} payment of {$transaction->currency} {$transaction->amount} was successful.",
+                    [
+                        'transaction_id' => $transaction->transaction_id,
+                        'category' => $metadata['categoryCode'] ?? null,
+                        'provider' => $metadata['providerName'] ?? null,
+                        'account_number' => $metadata['accountNumber'] ?? null,
+                    ]
+                );
             }
 
             return [

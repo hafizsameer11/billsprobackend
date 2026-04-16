@@ -81,6 +81,23 @@ class NotificationHelper
     }
 
     /**
+     * Create a welcome notification for new users.
+     */
+    public static function createWelcomeNotification(User $user): Notification
+    {
+        return self::create(
+            $user->id,
+            'account',
+            'Welcome to BillsPro',
+            'Your account has been created successfully. Start by funding your wallet to make payments.',
+            [
+                'event' => 'user_created',
+                'created_at' => now()->toIso8601String(),
+            ]
+        );
+    }
+
+    /**
      * Mark notification as read
      *
      * @param int $notificationId
