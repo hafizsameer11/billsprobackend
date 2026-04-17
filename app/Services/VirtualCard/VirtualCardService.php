@@ -300,6 +300,23 @@ class VirtualCardService
         return round((float) config('virtual_card.fund_processing_fee_ngn', 500.0), 2);
     }
 
+    /**
+     * USD amount shown as "card funding fee" in apps — mirrors admin `virtual_card` / `fund` `fee_usd`.
+     * Legacy rows may only have `fixed_fee_ngn`; derive a display USD using the fund exchange rate.
+     */
+    protected function resolveCardFundingFeeUsdForDisplay(?PlatformRate $r, float $ngnPerUsd): float
+    {
+        $ngnPerUsd = max(0.0001, $ngnPerUsd);
+        if ($r && $r->fee_usd !== null) {
+            return max(0.0, (float) $r->fee_usd);
+        }
+        if ($r && (float) $r->fixed_fee_ngn > 0.0) {
+            return round((float) $r->fixed_fee_ngn / $ngnPerUsd, 8);
+        }
+
+        return max(0.0, (float) config('virtual_card.fund_load_flat_fee_usd', 1.0));
+    }
+
     protected function computeCreationFeeNgn(): float
     {
         return round($this->resolveCreationFeeUsd() * $this->resolveCreationRateNgnPerUsd(), 2);
@@ -343,7 +360,7 @@ class VirtualCardService
 
         $totalUsd = round($principalUsd + $loadFeeUsd, 8);
 
-        $cardFundingFeeUsdDisplay = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
+        $cardFundingFeeUsdDisplay = $this->resolveCardFundingFeeUsdForDisplay($r, $rate);
 
         $out = [
             'principal_usd' => round($principalUsd, 8),
@@ -353,7 +370,7 @@ class VirtualCardService
             'exchange_rate_ngn_per_usd' => $rate,
             'payment_wallet_type' => $paymentWalletType,
             'fund_include_provider_load_fee' => $includeLoad,
-            /** Shown in apps as “card funding fee” (USD only line); may differ from `load_fee_usd` when load fee bundle is off. */
+            /** Shown in apps as “card funding fee” (USD); from admin `fee_usd` × rate → `processing_fee_ngn` for Naira. */
             'card_funding_fee_usd' => $cardFundingFeeUsdDisplay,
             'billspro_transaction_fee_percent' => 0.0,
             'billspro_transaction_fee_ngn' => 0.0,
@@ -464,7 +481,7 @@ class VirtualCardService
         }
 
         try {
-            return DB::transaction(function () use ($userId, $card, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
+            $result = DB::transaction(function () use ($userId, $card, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
                         ->where('currency', $fiatCurrency)
@@ -571,6 +588,16 @@ class VirtualCardService
                     ],
                 ];
             });
+
+            if (($result['success'] ?? false) === true) {
+                $this->syncCardBalanceWithProviderDetails($userId, (int) $card->id);
+                $refreshed = VirtualCard::where('id', $card->id)->where('user_id', $userId)->first();
+                if ($refreshed && isset($result['data']) && is_array($result['data'])) {
+                    $result['data']['card'] = $refreshed;
+                }
+            }
+
+            return $result;
         } catch (\RuntimeException $e) {
             Log::critical('Virtual card funded at provider but wallet bookkeeping failed', [
                 'user_id' => $userId,
@@ -691,6 +718,38 @@ class VirtualCardService
             ->where('is_active', true)
             ->orderBy('created_at', 'desc')
             ->get();
+    }
+
+    /**
+     * Re-fetch {@see getMerchantMasterCard} after a successful fund. The fund response often lists a
+     * partial field as `balance` while getcarddetails exposes the full card USD balance Pagocards shows.
+     */
+    protected function syncCardBalanceWithProviderDetails(int $userId, int $cardId): void
+    {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
+        if (! $card || ! $card->provider_card_id) {
+            return;
+        }
+
+        $user = User::find($userId);
+        if (! $user) {
+            return;
+        }
+
+        try {
+            $response = $this->mastercardApiClient->getMerchantMasterCard([
+                'email' => $this->resolveProviderAccountEmail($user, $card),
+                'cardid' => $card->provider_card_id,
+            ]);
+            $card->update([
+                'balance' => $this->extractBalance($response, (float) $card->balance),
+                'provider_payload' => $response,
+                'provider_status' => $this->extractStatus($response, $card->provider_status),
+            ]);
+            $this->syncProviderTransactions($userId, $cardId, $response);
+        } catch (MastercardApiException) {
+            // keep balance from fund step
+        }
     }
 
     /**
@@ -1074,17 +1133,24 @@ class VirtualCardService
     protected function extractBalance(array $response, ?float $fallback = 0): float
     {
         $candidates = [
+            data_get($response, 'data.total_balance'),
+            data_get($response, 'data.totalBalance'),
+            data_get($response, 'data.wallet_balance'),
+            data_get($response, 'data.walletBalance'),
+            data_get($response, 'data.current_balance'),
+            data_get($response, 'data.currentBalance'),
             data_get($response, 'data.balance'),
             data_get($response, 'data.available_balance'),
             data_get($response, 'data.availableBalance'),
             data_get($response, 'data.card_balance'),
             data_get($response, 'data.cardBalance'),
-            data_get($response, 'data.amount'),
             data_get($response, 'balance'),
             data_get($response, 'available_balance'),
             data_get($response, 'availableBalance'),
             data_get($response, 'card_balance'),
             data_get($response, 'cardBalance'),
+            // Often the funded amount on fund responses, not remaining balance — keep near fallback
+            data_get($response, 'data.amount'),
             data_get($response, 'amount'),
             $fallback,
         ];
