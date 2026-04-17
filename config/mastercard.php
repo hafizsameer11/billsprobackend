@@ -8,7 +8,8 @@
  *   /mastercard/blockdigital | unblockdigital
  *   /mastercard/check3ds | approve3ds | checkwallet
  *   /mastercard/spendcontrol | deletespendcontrol
- * Also used by this app (confirm with Pagocards if 404): terminatedigital, getcardtransactions.
+ * Optional: `getcardtransactions` — only used when MASTERCARD_USE_DEDICATED_TX_ENDPOINT=true (Pagocards usually embeds tx in getcarddetails).
+ * Also used by this app (confirm with Pagocards if 404): terminatedigital.
  *
  * `env('KEY') ?: default` so blank `.env` lines cannot wipe paths.
  */
@@ -22,6 +23,12 @@ return [
     'base_url' => rtrim((string) (env('MASTERCARD_API_BASE_URL') ?: $pagoApiBase), '/'),
 
     'merchant_base_url' => rtrim((string) (env('MASTERCARD_API_MERCHANT_BASE_URL') ?: env('MASTERCARD_API_BASE_URL') ?: $pagoApiBase), '/'),
+
+    /** When true, also call POST /mastercard/getcardtransactions after getcarddetails (default: false). */
+    'use_dedicated_transactions_endpoint' => filter_var(
+        env('MASTERCARD_USE_DEDICATED_TX_ENDPOINT', 'false'),
+        FILTER_VALIDATE_BOOLEAN
+    ),
 
     'endpoints' => [
         'merchant_master_create' => env('MASTERCARD_API_CREATE_PATH') ?: '/mastercard/createcard',

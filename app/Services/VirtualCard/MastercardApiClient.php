@@ -2,8 +2,10 @@
 
 namespace App\Services\VirtualCard;
 
+use App\Models\ApplicationLog;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class MastercardApiClient
 {
@@ -119,6 +121,12 @@ class MastercardApiClient
                 ])
                 ->post($url, $payload);
         } catch (ConnectionException $exception) {
+            ApplicationLog::warning('mastercard_api', 'mastercard_api.connection_failed', [
+                'endpoint_key' => $endpointKey,
+                'url' => $url,
+                'error' => $exception->getMessage(),
+            ]);
+
             throw new MastercardApiException('Unable to connect to virtual card provider.', 503, [
                 'endpoint_key' => $endpointKey,
                 'url' => $url,
@@ -133,6 +141,18 @@ class MastercardApiClient
 
         if (! $response->ok()) {
             $message = $this->normalizeMessage($data['message'] ?? null);
+            $logContext = [
+                'endpoint_key' => $endpointKey,
+                'url' => $url,
+                'http_status' => $response->status(),
+                'response_json' => $data,
+            ];
+            if ($data === []) {
+                $logContext['response_body_snippet'] = Str::limit((string) $response->body(), 800);
+            }
+
+            ApplicationLog::warning('mastercard_api', 'mastercard_api.request_failed', $logContext);
+
             throw new MastercardApiException(
                 $message,
                 $response->status(),

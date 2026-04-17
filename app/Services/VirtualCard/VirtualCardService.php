@@ -2,6 +2,7 @@
 
 namespace App\Services\VirtualCard;
 
+use App\Models\ApplicationLog;
 use App\Models\FiatWallet;
 use App\Models\PlatformRate;
 use App\Models\Transaction;
@@ -439,6 +440,22 @@ class VirtualCardService
                 $message = $exception->getMessage();
             }
 
+            ApplicationLog::warning('virtual_card', 'virtual_card.fund_provider_failed', [
+                'endpoint_key' => $context['endpoint_key'] ?? 'merchant_master_fund',
+                'user_id' => $userId,
+                'virtual_card_id' => $cardId,
+                'provider_card_id' => $card->provider_card_id,
+                'http_status' => $exception->getHttpStatus(),
+                'user_message' => $message,
+                'provider_message' => $exception->getMessage(),
+                'merchant_base_url' => config('mastercard.merchant_base_url'),
+                'fund_path' => config('mastercard.endpoints.merchant_master_fund'),
+                'resolved_fund_url' => rtrim((string) config('mastercard.merchant_base_url'), '/')
+                    .'/'.ltrim((string) config('mastercard.endpoints.merchant_master_fund'), '/'),
+                'provider_url' => $context['url'] ?? null,
+                'mastercard_context' => $context,
+            ]);
+
             return [
                 'success' => false,
                 'message' => $message,
@@ -447,7 +464,7 @@ class VirtualCardService
         }
 
         try {
-            return DB::transaction(function () use ($userId, $card, $data, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
+            return DB::transaction(function () use ($userId, $card, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
                         ->where('currency', $fiatCurrency)
@@ -726,40 +743,49 @@ class VirtualCardService
 
     /**
      * Get card transactions (virtual_card_transactions + any main ledger rows for this card not yet linked).
+     *
+     * Pagocards embeds recent card activity in **getcarddetails** (`POST /mastercard/getcarddetails`).
+     * We sync from that response first; optional `getcardtransactions` is only used when enabled and
+     * does not replace card-details data.
      */
     public function getCardTransactions(int $userId, int $cardId, int $limit = 50): array
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
         if ($card && $card->provider_card_id) {
             $user = User::findOrFail($userId);
+            $email = $this->resolveProviderAccountEmail($user, $card);
+
             try {
-                $providerResponse = $this->mastercardApiClient->merchantMasterTransactions([
-                    'email' => $this->resolveProviderAccountEmail($user, $card),
+                $cardDetailsResponse = $this->mastercardApiClient->getMerchantMasterCard([
+                    'email' => $email,
                     'cardid' => $card->provider_card_id,
                 ]);
-                Log::channel('database')->info('[virtual_card] merchant_master_transactions complete provider response', [
+                Log::channel('database')->info('[virtual_card] get_card_details (tx sync) complete provider response', [
                     'user_id' => $userId,
                     'virtual_card_id' => $cardId,
                     'provider_card_id' => $card->provider_card_id,
-                    'provider_response' => $providerResponse,
+                    'provider_response' => $cardDetailsResponse,
                 ]);
-                $this->syncProviderTransactions($userId, $cardId, $providerResponse);
+                $this->syncProviderTransactions($userId, $cardId, $cardDetailsResponse);
             } catch (MastercardApiException) {
-                // If provider has no dedicated transactions endpoint, attempt sync from card details.
+                // return local cache below
+            }
+
+            if (config('mastercard.use_dedicated_transactions_endpoint', false)) {
                 try {
-                    $cardDetailsResponse = $this->mastercardApiClient->getMerchantMasterCard([
-                        'email' => $this->resolveProviderAccountEmail($user, $card),
+                    $providerResponse = $this->mastercardApiClient->merchantMasterTransactions([
+                        'email' => $email,
                         'cardid' => $card->provider_card_id,
                     ]);
-                    Log::channel('database')->info('[virtual_card] get_card_details fallback (tx list) complete provider response', [
+                    Log::channel('database')->info('[virtual_card] merchant_master_transactions supplemental sync', [
                         'user_id' => $userId,
                         'virtual_card_id' => $cardId,
                         'provider_card_id' => $card->provider_card_id,
-                        'provider_response' => $cardDetailsResponse,
+                        'provider_response' => $providerResponse,
                     ]);
-                    $this->syncProviderTransactions($userId, $cardId, $cardDetailsResponse);
+                    $this->syncProviderTransactions($userId, $cardId, $providerResponse);
                 } catch (MastercardApiException) {
-                    // return local cache
+                    // optional endpoint missing or failing — card-details sync above is enough
                 }
             }
         }
@@ -1119,6 +1145,13 @@ class VirtualCardService
             data_get($response, 'data.transaction'),
             data_get($response, 'data.card_transactions'),
             data_get($response, 'data.cardTransactions'),
+            data_get($response, 'data.card.transaction'),
+            data_get($response, 'data.card.transactions'),
+            data_get($response, 'data.transaction_history'),
+            data_get($response, 'data.transactionHistory'),
+            data_get($response, 'data.recent_transactions'),
+            data_get($response, 'data.recentTransactions'),
+            data_get($response, 'data.activity'),
             data_get($response, 'data.history'),
             data_get($response, 'data.statement'),
             data_get($response, 'data.items'),
@@ -1148,7 +1181,7 @@ class VirtualCardService
     }
 
     /**
-     * @param array<string, mixed> $tx
+     * @param  array<string, mixed>  $tx
      */
     protected function isLikelyTransactionObject(array $tx): bool
     {
@@ -1280,7 +1313,7 @@ class VirtualCardService
      * 2) stored card metadata provider_account_email
      * 3) authenticated user email
      *
-     * @param array<string, mixed> $requestData
+     * @param  array<string, mixed>  $requestData
      */
     protected function resolveProviderAccountEmail(User $user, VirtualCard $card, array $requestData = []): string
     {
