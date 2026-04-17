@@ -12,7 +12,9 @@ return [
 
     /*
     | Card load: user pays from Naira or Crypto before we call the provider fund API.
-    | Naira charge = (principal_usd + optional load fee in USD) * rate + processing_fee_ngn.
+    | Naira charge = (principal_usd + optional load fee in USD) * rate + flat_processing_ngn.
+    | Flat processing: admin `platform_rates` category virtual_card / fund — `fee_usd` ×
+    | `exchange_rate_ngn_per_usd` (legacy rows may use `fixed_fee_ngn` only). Fallback: fund_processing_fee_ngn.
     | Crypto charge = principal_usd + optional load fee (USD).
     |
     | When fund_include_provider_load_fee is true, user is also charged Pagocards-style

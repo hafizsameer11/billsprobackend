@@ -3,6 +3,7 @@
 namespace App\Services\VirtualCard;
 
 use App\Models\FiatWallet;
+use App\Models\PlatformRate;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\VirtualCard;
@@ -229,9 +230,7 @@ class VirtualCardService
         $fundRate = $rFund && $rFund->exchange_rate_ngn_per_usd !== null
             ? (float) $rFund->exchange_rate_ngn_per_usd
             : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $fundProcessingNgn = $rFund
-            ? (float) $rFund->fixed_fee_ngn
-            : (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
+        $fundProcessingNgn = $this->resolveFundFlatProcessingFeeNgn($rFund, $fundRate);
         $includeLoad = (bool) config('virtual_card.fund_include_provider_load_fee', false);
         $fundFlatUsd = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
         $fundPct = $rFund && $rFund->percentage_fee !== null
@@ -281,6 +280,25 @@ class VirtualCardService
         return max(0.0001, (float) config('virtual_card.usd_to_ngn_rate', 1500.0));
     }
 
+    /**
+     * Flat BillsPro processing fee for card loads (added to Naira debit): prefer admin `fee_usd` × NGN/USD;
+     * legacy rows may only have `fixed_fee_ngn`.
+     */
+    protected function resolveFundFlatProcessingFeeNgn(?PlatformRate $r, float $ngnPerUsd): float
+    {
+        $ngnPerUsd = max(0.0001, $ngnPerUsd);
+        if ($r) {
+            if ($r->fee_usd !== null) {
+                return round(max(0.0, (float) $r->fee_usd) * $ngnPerUsd, 2);
+            }
+            if ((float) $r->fixed_fee_ngn > 0.0) {
+                return round((float) $r->fixed_fee_ngn, 2);
+            }
+        }
+
+        return round((float) config('virtual_card.fund_processing_fee_ngn', 500.0), 2);
+    }
+
     protected function computeCreationFeeNgn(): float
     {
         return round($this->resolveCreationFeeUsd() * $this->resolveCreationRateNgnPerUsd(), 2);
@@ -310,9 +328,7 @@ class VirtualCardService
         $rate = $r && $r->exchange_rate_ngn_per_usd !== null
             ? (float) $r->exchange_rate_ngn_per_usd
             : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $processingNgn = $r
-            ? (float) $r->fixed_fee_ngn
-            : (float) config('virtual_card.fund_processing_fee_ngn', 500.0);
+        $processingNgn = $this->resolveFundFlatProcessingFeeNgn($r, $rate);
         $includeLoad = (bool) config('virtual_card.fund_include_provider_load_fee', false);
         $flat = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
         $pct = $r && $r->percentage_fee !== null
@@ -709,9 +725,9 @@ class VirtualCardService
     }
 
     /**
-     * Get card transactions
+     * Get card transactions (virtual_card_transactions + any main ledger rows for this card not yet linked).
      */
-    public function getCardTransactions(int $userId, int $cardId, int $limit = 50): \Illuminate\Database\Eloquent\Collection
+    public function getCardTransactions(int $userId, int $cardId, int $limit = 50): array
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
         if ($card && $card->provider_card_id) {
@@ -748,12 +764,79 @@ class VirtualCardService
             }
         }
 
-        return VirtualCardTransaction::where('virtual_card_id', $cardId)
+        $vcRows = VirtualCardTransaction::where('virtual_card_id', $cardId)
             ->where('user_id', $userId)
             ->with(['transaction'])
             ->orderBy('created_at', 'desc')
             ->limit($limit)
             ->get();
+
+        $coveredMainIds = $vcRows->pluck('transaction_id')->filter()->unique()->values();
+
+        $extraMain = Transaction::query()
+            ->where('user_id', $userId)
+            ->whereIn('type', ['card_funding', 'card_withdrawal'])
+            ->where(function ($q) use ($cardId) {
+                $q->where('metadata->card_id', $cardId)
+                    ->orWhere('metadata->virtual_card_id', $cardId);
+            })
+            ->when($coveredMainIds->isNotEmpty(), fn ($q) => $q->whereNotIn('id', $coveredMainIds))
+            ->orderByDesc('created_at')
+            ->limit($limit)
+            ->get();
+
+        $fromVc = $vcRows->map(fn (VirtualCardTransaction $row) => $row->toArray())->all();
+        $fromLedger = $extraMain->map(fn (Transaction $t) => $this->formatMainLedgerRowForCardTransactions($t, $cardId))->all();
+
+        $merged = collect(array_merge($fromVc, $fromLedger))
+            ->sortByDesc(fn (array $row) => $row['created_at'] ?? '')
+            ->values()
+            ->take($limit)
+            ->all();
+
+        return $merged;
+    }
+
+    /**
+     * Shape a main {@see Transaction} row like {@see VirtualCardTransaction} for the mobile card feed.
+     */
+    protected function formatMainLedgerRowForCardTransactions(Transaction $t, int $cardId): array
+    {
+        $type = match ($t->type) {
+            'card_funding' => 'fund',
+            'card_withdrawal' => 'withdraw',
+            default => $t->type,
+        };
+
+        $md = is_array($t->metadata) ? $t->metadata : [];
+
+        return [
+            'id' => -1 * (int) $t->id,
+            'virtual_card_id' => $cardId,
+            'user_id' => $t->user_id,
+            'transaction_id' => $t->id,
+            'provider_transaction_id' => null,
+            'type' => $type,
+            'status' => $t->status,
+            'currency' => $t->currency,
+            'amount' => (float) $t->amount,
+            'fee' => (float) $t->fee,
+            'total_amount' => (float) $t->total_amount,
+            'payment_wallet_type' => $md['payment_wallet_type'] ?? null,
+            'payment_wallet_currency' => $md['payment_wallet_currency'] ?? null,
+            'exchange_rate' => isset($md['exchange_rate_ngn_per_usd']) ? (float) $md['exchange_rate_ngn_per_usd'] : null,
+            'reference' => $t->reference,
+            'description' => $t->description,
+            'metadata' => array_merge($md, [
+                'virtual_card_id' => $cardId,
+                'source' => 'ledger_transaction',
+                'ledger_transaction_id' => $t->transaction_id,
+            ]),
+            'provider_payload' => null,
+            'created_at' => $t->created_at?->toIso8601String(),
+            'updated_at' => $t->updated_at?->toIso8601String(),
+            'transaction' => null,
+        ];
     }
 
     /**
