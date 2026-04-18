@@ -7,6 +7,13 @@ use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
+/**
+ * Admin-configured profit on top of customer-facing pricing from {@see \App\Services\Platform\PlatformRateResolver}
+ * and {@see \App\Services\Crypto\CryptoService}.
+ *
+ * Revenue shape differs by transaction type: fiat/bills use ledger fees; on-chain crypto uses USD-notional fees;
+ * buy/sell use NGN notional from metadata (spread), not `transactions.fee` (often zero).
+ */
 class ProfitReportingService
 {
     /**
@@ -17,7 +24,8 @@ class ProfitReportingService
      *   basis_amount: string,
      *   basis: string,
      *   service_key: string,
-     *   setting_label: string|null
+     *   setting_label: string|null,
+     *   profit_currency: string|null
      * }
      */
     public function computeForTransaction(Transaction $t, Collection $settingsByKey): array
@@ -32,16 +40,18 @@ class ProfitReportingService
                 'basis' => 'total_amount',
                 'service_key' => (string) ($t->type ?? ''),
                 'setting_label' => null,
+                'profit_currency' => null,
             ];
         }
 
-        $basisKey = in_array($setting->percentage_basis, ['amount', 'fee', 'total_amount'], true)
+        $basisKey = in_array($setting->percentage_basis, ['amount', 'fee', 'total_amount', 'ngn_notional'], true)
             ? $setting->percentage_basis
             : 'total_amount';
 
         $basisAmount = match ($basisKey) {
             'amount' => (float) $t->amount,
             'fee' => (float) $t->fee,
+            'ngn_notional' => $this->ngnNotionalFromTransaction($t),
             default => (float) $t->total_amount,
         };
 
@@ -49,6 +59,8 @@ class ProfitReportingService
         $pct = (float) $setting->percentage;
         $pctProfit = round($basisAmount * $pct / 100, 8);
         $total = round($fixed + $pctProfit, 8);
+
+        $profitCurrency = $basisKey === 'ngn_notional' ? 'NGN' : null;
 
         return [
             'fixed_profit' => $this->fmt($fixed),
@@ -58,7 +70,29 @@ class ProfitReportingService
             'basis' => $basisKey,
             'service_key' => (string) $setting->service_key,
             'setting_label' => $setting->label,
+            'profit_currency' => $profitCurrency,
         ];
+    }
+
+    /**
+     * NGN economic leg for crypto buy (metadata.payment_amount) and sell (ngn_amount / amount_to_receive).
+     */
+    protected function ngnNotionalFromTransaction(Transaction $t): float
+    {
+        $meta = is_array($t->metadata) ? $t->metadata : [];
+        $type = (string) ($t->type ?? '');
+
+        if ($type === 'crypto_buy') {
+            return isset($meta['payment_amount']) ? (float) $meta['payment_amount'] : 0.0;
+        }
+
+        if ($type === 'crypto_sell') {
+            $v = $meta['ngn_amount'] ?? $meta['amount_to_receive'] ?? null;
+
+            return $v !== null && $v !== '' ? (float) $v : 0.0;
+        }
+
+        return 0.0;
     }
 
     /**

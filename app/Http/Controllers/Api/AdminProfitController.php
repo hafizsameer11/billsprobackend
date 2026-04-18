@@ -8,6 +8,8 @@ use App\Models\ServiceProfitSetting;
 use App\Models\Transaction;
 use App\Services\Admin\AdminAuditService;
 use App\Services\Admin\ProfitReportingService;
+use App\Services\Admin\TransactionPlatformRateSnapshot;
+use App\Services\Admin\TransactionRevenueClassifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -16,7 +18,9 @@ class AdminProfitController extends Controller
 {
     public function __construct(
         protected ProfitReportingService $profit,
-        protected AdminAuditService $audit
+        protected AdminAuditService $audit,
+        protected TransactionPlatformRateSnapshot $rateSnapshot,
+        protected TransactionRevenueClassifier $revenueClassifier,
     ) {}
 
     public function settings(): JsonResponse
@@ -37,7 +41,7 @@ class AdminProfitController extends Controller
         $data = $request->validate([
             'fixed_fee' => ['required', 'numeric', 'min:0'],
             'percentage' => ['required', 'numeric', 'min:0', 'max:100'],
-            'percentage_basis' => ['required', 'string', Rule::in(['amount', 'total_amount', 'fee'])],
+            'percentage_basis' => ['required', 'string', Rule::in(['amount', 'total_amount', 'fee', 'ngn_notional'])],
             'is_active' => ['required', 'boolean'],
         ]);
 
@@ -98,6 +102,7 @@ class AdminProfitController extends Controller
         $paginator = $q->paginate($perPage);
         $paginator->getCollection()->transform(function (Transaction $t) use ($settingsByKey) {
             $profit = $this->profit->computeForTransaction($t, $settingsByKey);
+            $revenue = $this->revenueClassifier->classify($t);
 
             return [
                 'id' => $t->id,
@@ -120,6 +125,8 @@ class AdminProfitController extends Controller
                     'email' => $t->user->email,
                 ] : null,
                 'profit' => $profit,
+                'revenue' => $revenue,
+                'rate_from_admin' => $this->rateSnapshot->forTransaction($t),
             ];
         });
 

@@ -669,6 +669,12 @@ class CryptoService
             }
 
             $walletCurrencyMeta = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+            $ngnPerUsd = $this->ngnPerUsd();
+            $refUsdBuy = $walletCurrencyMeta ? (float) $walletCurrencyMeta->usdPerUnitForBuy() : 0.0;
+            $referenceNgnPerCrypto = $refUsdBuy > 0 ? $refUsdBuy * $ngnPerUsd : null;
+            $cryptoAmt = (float) $previewData['crypto_amount'];
+            $paymentNgn = (float) $previewData['amount'];
+            $appliedNgnPerCrypto = $cryptoAmt > 0 ? $paymentNgn / $cryptoAmt : null;
 
             // Create transaction
             $transaction = Transaction::create([
@@ -691,6 +697,8 @@ class CryptoService
                     'payment_amount' => $previewData['amount'],
                     'payment_currency' => $paymentMethod === 'naira' ? 'NGN' : 'USD',
                     'exchange_rate' => $previewData['exchange_rate'],
+                    'reference_ngn_per_crypto' => $referenceNgnPerCrypto !== null ? round($referenceNgnPerCrypto, 8) : null,
+                    'applied_ngn_per_crypto' => $appliedNgnPerCrypto !== null ? round($appliedNgnPerCrypto, 8) : null,
                 ],
                 'completed_at' => now(),
             ]);
@@ -873,6 +881,14 @@ class CryptoService
 
             $fiatWallet->increment('balance', $previewData['amount_to_receive']);
 
+            $walletCurrencyMeta = WalletCurrency::findActiveForCrypto($currency, $blockchain);
+            $ngnPerUsd = $this->ngnPerUsd();
+            $refUsdSell = $walletCurrencyMeta ? (float) $walletCurrencyMeta->usdPerUnitForSell() : 0.0;
+            $referenceNgnPerCrypto = $refUsdSell > 0 ? $refUsdSell * $ngnPerUsd : null;
+            $cryptoAmt = (float) $previewData['crypto_amount'];
+            $ngnRecv = (float) $previewData['ngn_amount'];
+            $appliedNgnPerCrypto = $cryptoAmt > 0 ? $ngnRecv / $cryptoAmt : null;
+
             // Create transaction
             $transaction = Transaction::create([
                 'user_id' => $userId,
@@ -892,6 +908,8 @@ class CryptoService
                     'ngn_amount' => $previewData['ngn_amount'],
                     'amount_to_receive' => $previewData['amount_to_receive'],
                     'exchange_rate' => $previewData['exchange_rate'],
+                    'reference_ngn_per_crypto' => $referenceNgnPerCrypto !== null ? round($referenceNgnPerCrypto, 8) : null,
+                    'applied_ngn_per_crypto' => $appliedNgnPerCrypto !== null ? round($appliedNgnPerCrypto, 8) : null,
                 ],
                 'completed_at' => now(),
             ]);
