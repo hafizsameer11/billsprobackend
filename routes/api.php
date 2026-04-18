@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\AdminKycController;
 use App\Http\Controllers\Api\AdminMasterWalletController;
 use App\Http\Controllers\Api\AdminNotificationController;
 use App\Http\Controllers\Api\AdminPlatformRateController;
+use App\Http\Controllers\Api\AdminProfitController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
 use App\Http\Controllers\Api\AdminTransactionController;
@@ -240,6 +241,10 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
 
         Route::get('/transactions', [AdminTransactionController::class, 'index']);
         Route::get('/transactions/{transactionId}', [AdminTransactionController::class, 'show']);
+
+        Route::get('/profit/settings', [AdminProfitController::class, 'settings']);
+        Route::put('/profit/settings/{serviceKey}', [AdminProfitController::class, 'updateSetting']);
+        Route::get('/profit/transactions', [AdminProfitController::class, 'transactions']);
 
         Route::get('/deposits', [AdminDepositController::class, 'index']);
         Route::get('/deposit-fee-quote', [AdminDepositController::class, 'feeQuote']);

@@ -12,13 +12,24 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Models\VirtualCard;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AdminStatsController extends Controller
 {
-    public function index(): JsonResponse
+    /** @var array<string, true> */
+    private const VALID_RANGES = ['7d' => true, '30d' => true, '90d' => true, '12m' => true];
+
+    public function index(Request $request): JsonResponse
     {
+        $rangeRaw = $request->query('range');
+        $applyRange = is_string($rangeRaw) && $rangeRaw !== '' && isset(self::VALID_RANGES[$rangeRaw]);
+        $range = $applyRange ? $rangeRaw : '12m';
+
+        $periodStart = $applyRange ? $this->periodStart($range) : null;
+
         $pendingKyc = Kyc::query()->where('status', 'pending')->count();
         $approvedKyc = Kyc::query()->where('status', 'approved')->count();
         $rejectedKyc = Kyc::query()->where('status', 'rejected')->count();
@@ -29,17 +40,24 @@ class AdminStatsController extends Controller
         $newUsers30d = User::query()->where('created_at', '>=', now()->subDays(30))->count();
         $activeUsers = User::query()->where('account_status', 'active')->count();
 
-        $transactionsTotal = Transaction::query()->count();
+        $transactionsQ = Transaction::query();
+        if ($periodStart !== null) {
+            $transactionsQ->where('created_at', '>=', $periodStart);
+        }
+        $transactionsTotal = (int) $transactionsQ->count();
 
         $recentVolume = (float) (Transaction::query()
             ->where('created_at', '>=', now()->subDays(7))
             ->where('status', 'completed')
             ->sum('amount') ?? 0);
 
-        $revenueNgn = (float) (Transaction::query()
+        $revenueQ = Transaction::query()
             ->where('status', 'completed')
-            ->where('currency', 'NGN')
-            ->sum('amount') ?? 0);
+            ->where('currency', 'NGN');
+        if ($periodStart !== null) {
+            $revenueQ->where('created_at', '>=', $periodStart);
+        }
+        $revenueNgn = (float) ($revenueQ->sum('amount') ?? 0);
 
         $failedJobs = 0;
         if (DB::getSchemaBuilder()->hasTable('failed_jobs')) {
@@ -52,34 +70,15 @@ class AdminStatsController extends Controller
 
         $totalNairaSystem = (float) FiatWallet::query()->where('currency', 'NGN')->sum('balance');
 
-        $chartLabels = [];
-        $withdrawalSeries = [];
-        $depositSeries = [];
-        for ($i = 11; $i >= 0; $i--) {
-            $d = Carbon::now()->subMonths($i);
-            $chartLabels[] = $d->format('M');
-            $withdrawalSeries[] = (float) Transaction::query()
-                ->where('status', 'completed')
-                ->where('type', 'withdrawal')
-                ->where('currency', 'NGN')
-                ->whereYear('created_at', $d->year)
-                ->whereMonth('created_at', $d->month)
-                ->sum('amount');
-            $depositSeries[] = (float) Transaction::query()
-                ->where('status', 'completed')
-                ->where('type', 'deposit')
-                ->where('currency', 'NGN')
-                ->whereYear('created_at', $d->year)
-                ->whereMonth('created_at', $d->month)
-                ->sum('amount');
-        }
+        $chartRange = $applyRange ? $range : '12m';
+        [$chartLabels, $withdrawalSeries, $depositSeries] = $this->buildNgnWithdrawalDepositChart($chartRange);
 
         $latestUsers = User::query()
             ->orderByDesc('id')
             ->limit(10)
             ->get(['id', 'name', 'first_name', 'last_name', 'email', 'account_status', 'kyc_completed', 'created_at']);
 
-        return ResponseHelper::success([
+        $payload = [
             'users_total' => $usersTotal,
             'new_users_30d' => $newUsers30d,
             'active_users' => $activeUsers,
@@ -118,6 +117,109 @@ class AdminStatsController extends Controller
                     'created_at' => $u->created_at?->toIso8601String(),
                 ];
             }),
-        ], 'Stats retrieved.');
+        ];
+
+        if ($applyRange) {
+            $payload['range'] = $range;
+        }
+
+        return ResponseHelper::success($payload, 'Stats retrieved.');
+    }
+
+    private function periodStart(string $range): CarbonInterface
+    {
+        return match ($range) {
+            '7d' => now()->subDays(7),
+            '30d' => now()->subDays(30),
+            '90d' => now()->subDays(90),
+            '12m' => now()->subMonths(12),
+            default => now()->subMonths(12),
+        };
+    }
+
+    /**
+     * @return array{0: list<string>, 1: list<float>, 2: list<float>}
+     */
+    private function buildNgnWithdrawalDepositChart(string $range): array
+    {
+        $chartLabels = [];
+        $withdrawalSeries = [];
+        $depositSeries = [];
+
+        if ($range === '12m') {
+            for ($i = 11; $i >= 0; $i--) {
+                $d = Carbon::now()->subMonths($i);
+                $chartLabels[] = $d->format('M');
+                $withdrawalSeries[] = $this->sumNgnCompletedByMonth($d, 'withdrawal');
+                $depositSeries[] = $this->sumNgnCompletedByMonth($d, 'deposit');
+            }
+
+            return [$chartLabels, $withdrawalSeries, $depositSeries];
+        }
+
+        if ($range === '7d') {
+            for ($i = 6; $i >= 0; $i--) {
+                $d = Carbon::now()->subDays($i)->startOfDay();
+                $chartLabels[] = $d->format('D');
+                $withdrawalSeries[] = $this->sumNgnCompletedOnDay($d, 'withdrawal');
+                $depositSeries[] = $this->sumNgnCompletedOnDay($d, 'deposit');
+            }
+
+            return [$chartLabels, $withdrawalSeries, $depositSeries];
+        }
+
+        if ($range === '30d') {
+            for ($i = 29; $i >= 0; $i--) {
+                $d = Carbon::now()->subDays($i)->startOfDay();
+                $chartLabels[] = $d->format('j M');
+                $withdrawalSeries[] = $this->sumNgnCompletedOnDay($d, 'withdrawal');
+                $depositSeries[] = $this->sumNgnCompletedOnDay($d, 'deposit');
+            }
+
+            return [$chartLabels, $withdrawalSeries, $depositSeries];
+        }
+
+        // 90d — weekly buckets (13 weeks)
+        $start = Carbon::now()->subDays(90)->startOfDay();
+        for ($w = 0; $w < 13; $w++) {
+            $bucketStart = (clone $start)->addDays($w * 7);
+            $bucketEnd = (clone $bucketStart)->addDays(6)->endOfDay();
+            $chartLabels[] = $bucketStart->format('j M');
+            $withdrawalSeries[] = $this->sumNgnCompletedBetween($bucketStart, $bucketEnd, 'withdrawal');
+            $depositSeries[] = $this->sumNgnCompletedBetween($bucketStart, $bucketEnd, 'deposit');
+        }
+
+        return [$chartLabels, $withdrawalSeries, $depositSeries];
+    }
+
+    private function sumNgnCompletedByMonth(Carbon $monthRef, string $type): float
+    {
+        return (float) Transaction::query()
+            ->where('status', 'completed')
+            ->where('type', $type)
+            ->where('currency', 'NGN')
+            ->whereYear('created_at', $monthRef->year)
+            ->whereMonth('created_at', $monthRef->month)
+            ->sum('amount');
+    }
+
+    private function sumNgnCompletedOnDay(Carbon $day, string $type): float
+    {
+        return (float) Transaction::query()
+            ->where('status', 'completed')
+            ->where('type', $type)
+            ->where('currency', 'NGN')
+            ->whereDate('created_at', $day->toDateString())
+            ->sum('amount');
+    }
+
+    private function sumNgnCompletedBetween(CarbonInterface $from, CarbonInterface $to, string $type): float
+    {
+        return (float) Transaction::query()
+            ->where('status', 'completed')
+            ->where('type', $type)
+            ->where('currency', 'NGN')
+            ->whereBetween('created_at', [$from, $to])
+            ->sum('amount');
     }
 }
