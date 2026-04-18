@@ -65,6 +65,8 @@ class ProfitReportingService
      * @return array{
      *   transaction_count: int,
      *   sum_transaction_amount: string,
+     *   sum_fee_collected: string,
+     *   sum_principal_amount: string,
      *   sum_fixed_profit: string,
      *   sum_percentage_profit: string,
      *   sum_total_profit: string
@@ -76,9 +78,11 @@ class ProfitReportingService
         $sumPct = 0.0;
         $sumTotal = 0.0;
         $sumAmount = 0.0;
+        $sumFee = 0.0;
+        $sumPrincipal = 0.0;
         $count = 0;
 
-        $query->clone()->orderBy('id')->chunk(500, function ($rows) use ($settingsByKey, &$sumFixed, &$sumPct, &$sumTotal, &$sumAmount, &$count) {
+        $query->clone()->orderBy('id')->chunk(500, function ($rows) use ($settingsByKey, &$sumFixed, &$sumPct, &$sumTotal, &$sumAmount, &$sumFee, &$sumPrincipal, &$count) {
             foreach ($rows as $t) {
                 /** @var Transaction $t */
                 $p = $this->computeForTransaction($t, $settingsByKey);
@@ -86,6 +90,8 @@ class ProfitReportingService
                 $sumPct += (float) $p['percentage_profit'];
                 $sumTotal += (float) $p['total_profit'];
                 $sumAmount += (float) $t->total_amount;
+                $sumFee += (float) $t->fee;
+                $sumPrincipal += (float) $t->amount;
                 $count++;
             }
         });
@@ -93,6 +99,8 @@ class ProfitReportingService
         return [
             'transaction_count' => $count,
             'sum_transaction_amount' => $this->fmt($sumAmount),
+            'sum_fee_collected' => $this->fmt($sumFee),
+            'sum_principal_amount' => $this->fmt($sumPrincipal),
             'sum_fixed_profit' => $this->fmt($sumFixed),
             'sum_percentage_profit' => $this->fmt($sumPct),
             'sum_total_profit' => $this->fmt($sumTotal),
