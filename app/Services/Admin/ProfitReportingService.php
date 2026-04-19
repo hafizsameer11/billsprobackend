@@ -25,7 +25,8 @@ class ProfitReportingService
      *   basis: string,
      *   service_key: string,
      *   setting_label: string|null,
-     *   profit_currency: string|null
+     *   profit_currency: string|null,
+     *   admin_profit_percent: string|null
      * }
      */
     public function computeForTransaction(Transaction $t, Collection $settingsByKey): array
@@ -41,6 +42,7 @@ class ProfitReportingService
                 'service_key' => (string) ($t->type ?? ''),
                 'setting_label' => null,
                 'profit_currency' => null,
+                'admin_profit_percent' => null,
             ];
         }
 
@@ -71,6 +73,8 @@ class ProfitReportingService
             'service_key' => (string) $setting->service_key,
             'setting_label' => $setting->label,
             'profit_currency' => $profitCurrency,
+            // Admin “your profit” % from ServiceProfitSetting — not platform_rates.percentage_fee (customer fee).
+            'admin_profit_percent' => $this->fmt((float) $setting->percentage),
         ];
     }
 
