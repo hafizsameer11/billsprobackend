@@ -3,21 +3,21 @@
 namespace App\Services\BillPayment;
 
 use App\Helpers\NotificationHelper;
-use App\Models\BillPaymentCategory;
-use App\Models\BillPaymentProvider;
-use App\Models\BillPaymentPlan;
 use App\Models\Beneficiary;
-use App\Models\Transaction;
+use App\Models\BillPaymentCategory;
+use App\Models\BillPaymentPlan;
+use App\Models\BillPaymentProvider;
 use App\Models\FiatWallet;
+use App\Models\Transaction;
 use App\Services\Auth\AuthService;
 use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 
 class BillPaymentService
 {
     protected AuthService $authService;
+
     protected WalletService $walletService;
 
     public function __construct(
@@ -80,7 +80,7 @@ class BillPaymentService
     public function validateMeter(int $providerId, string $meterNumber, string $accountType): array
     {
         $provider = BillPaymentProvider::where('id', $providerId)
-            ->whereHas('category', function($q) {
+            ->whereHas('category', function ($q) {
                 $q->where('code', 'electricity');
             })
             ->firstOrFail();
@@ -117,7 +117,7 @@ class BillPaymentService
     public function validateAccount(int $providerId, string $accountNumber): array
     {
         $provider = BillPaymentProvider::where('id', $providerId)
-            ->whereHas('category', function($q) {
+            ->whereHas('category', function ($q) {
                 $q->where('code', 'betting');
             })
             ->firstOrFail();
@@ -248,7 +248,7 @@ class BillPaymentService
 
         // Get wallet
         $wallet = $this->walletService->getFiatWallet($userId, $data['currency'] ?? 'NGN');
-        if (!$wallet) {
+        if (! $wallet) {
             return [
                 'success' => false,
                 'message' => "Wallet for {$data['currency']} not found",
@@ -300,7 +300,7 @@ class BillPaymentService
 
         // Validate account/meter if required
         if ($category->code === 'electricity') {
-            if (!$accountType) {
+            if (! $accountType) {
                 return [
                     'success' => false,
                     'message' => 'Account type (prepaid/postpaid) is required for electricity',
@@ -335,8 +335,11 @@ class BillPaymentService
             'amount' => $amount,
             'fee' => $fee,
             'total_amount' => $totalAmount,
-            'reference' => 'BILL' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
+            'reference' => 'BILL'.strtoupper(substr(md5(uniqid(rand(), true)), 0, 12)),
             'description' => "{$category->name} payment - {$provider->name}",
+            'bank_name' => $provider->name,
+            'account_number' => $accountNumber,
+            'account_name' => $accountName,
             'metadata' => [
                 'categoryCode' => $category->code,
                 'categoryName' => $category->name,
@@ -405,7 +408,7 @@ class BillPaymentService
             ->where('status', 'pending')
             ->first();
 
-        if (!$transaction) {
+        if (! $transaction) {
             return [
                 'success' => false,
                 'message' => 'Transaction not found or already processed',
@@ -414,14 +417,14 @@ class BillPaymentService
 
         // Verify PIN
         $user = $transaction->user;
-        if (!$user->pin) {
+        if (! $user->pin) {
             return [
                 'success' => false,
                 'message' => 'PIN not set. Please setup your PIN first.',
             ];
         }
 
-        if (!$this->authService->verifyPin($user, $pin)) {
+        if (! $this->authService->verifyPin($user, $pin)) {
             return [
                 'success' => false,
                 'message' => 'Invalid PIN',
@@ -437,7 +440,7 @@ class BillPaymentService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$transaction) {
+            if (! $transaction) {
                 return [
                     'success' => false,
                     'message' => 'Transaction not found or already processed',
@@ -450,7 +453,7 @@ class BillPaymentService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$wallet) {
+            if (! $wallet) {
                 return [
                     'success' => false,
                     'message' => 'Wallet not found',
@@ -557,7 +560,7 @@ class BillPaymentService
             ->with(['category', 'provider']);
 
         if ($categoryCode) {
-            $query->whereHas('category', function($q) use ($categoryCode) {
+            $query->whereHas('category', function ($q) use ($categoryCode) {
                 $q->where('code', $categoryCode);
             });
         }

@@ -74,6 +74,8 @@ class PalmPayBillPaymentOrchestrator
         $notifyUrl = $webhookBase.'/bill-payment';
 
         [$transaction, $billRow] = DB::transaction(function () use ($userId, $sceneCode, $amount, $currency, $outOrderNo, $data, $wallet) {
+            $rechargeDisplay = $data['rechargeAccount'] ?? $data['phoneNumber'] ?? null;
+
             $transaction = Transaction::create([
                 'user_id' => $userId,
                 'transaction_id' => Transaction::generateTransactionId(),
@@ -86,6 +88,9 @@ class PalmPayBillPaymentOrchestrator
                 'total_amount' => $amount,
                 'reference' => $outOrderNo,
                 'description' => 'PalmPay '.$sceneCode.' — '.$data['billerId'],
+                'bank_name' => $data['providerName'] ?? $data['billerId'] ?? null,
+                'account_number' => $rechargeDisplay,
+                'account_name' => null,
                 'metadata' => [
                     'provider' => 'palmpay',
                     'sceneCode' => $sceneCode,
