@@ -987,7 +987,12 @@ class VirtualCardService
 
     public function check3ds(int $userId, int $cardId): array
     {
-        return $this->invokeProviderCardAction($userId, $cardId, fn (array $payload) => $this->mastercardApiClient->check3ds($payload));
+        return $this->invokeProviderCardAction(
+            $userId,
+            $cardId,
+            fn (array $payload) => $this->mastercardApiClient->check3ds($payload),
+            'check_3ds'
+        );
     }
 
     public function checkWalletOtp(int $userId, int $cardId): array
@@ -1004,25 +1009,68 @@ class VirtualCardService
         );
     }
 
-    protected function invokeProviderCardAction(int $userId, int $cardId, callable $apiAction): array
+    protected function invokeProviderCardAction(
+        int $userId,
+        int $cardId,
+        callable $apiAction,
+        string $actionKey = 'provider_card_action'
+    ): array
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
         if (! $card->provider_card_id) {
+            ApplicationLog::warning('virtual_card', "virtual_card.{$actionKey}.missing_provider_metadata", [
+                'user_id' => $userId,
+                'card_id' => $cardId,
+            ]);
             return ['success' => false, 'message' => 'This card is missing provider metadata.'];
         }
 
         $user = User::findOrFail($userId);
         $payload = ['email' => $this->resolveProviderAccountEmail($user, $card), 'cardid' => $card->provider_card_id];
+        ApplicationLog::info('virtual_card', "virtual_card.{$actionKey}.request_sent", [
+            'user_id' => $userId,
+            'card_id' => $cardId,
+            'provider_card_id' => $card->provider_card_id,
+            'payload' => $payload,
+        ]);
         try {
             $response = $apiAction($payload);
         } catch (MastercardApiException $exception) {
+            ApplicationLog::warning('virtual_card', "virtual_card.{$actionKey}.provider_exception", [
+                'user_id' => $userId,
+                'card_id' => $cardId,
+                'provider_card_id' => $card->provider_card_id,
+                'payload' => $payload,
+                'error' => $exception->getMessage(),
+            ]);
             return ['success' => false, 'message' => $exception->getMessage()];
         }
+
+        $providerFailed = $this->providerResponseIndicatesFailure($response);
+        ApplicationLog::info('virtual_card', "virtual_card.{$actionKey}.provider_response", [
+            'user_id' => $userId,
+            'card_id' => $cardId,
+            'provider_card_id' => $card->provider_card_id,
+            'payload' => $payload,
+            'provider_failed' => $providerFailed,
+            'response' => $response,
+        ]);
 
         $card->update([
             'provider_status' => $this->extractStatus($response, $card->provider_status),
             'provider_payload' => $response,
         ]);
+
+        if ($providerFailed) {
+            return [
+                'success' => false,
+                'message' => $this->extractProviderResponseMessage($response, 'Provider action failed.'),
+                'data' => [
+                    'card' => $card->fresh(),
+                    'provider_response' => $response,
+                ],
+            ];
+        }
 
         return [
             'success' => true,
@@ -1032,6 +1080,44 @@ class VirtualCardService
                 'provider_response' => $response,
             ],
         ];
+    }
+
+    protected function providerResponseIndicatesFailure(array $response): bool
+    {
+        $rawSuccess = data_get($response, 'success');
+        if (is_bool($rawSuccess)) {
+            return $rawSuccess === false;
+        }
+
+        $status = strtolower((string) data_get($response, 'status', ''));
+        if ($status !== '') {
+            return in_array($status, ['failed', 'failure', 'error', 'declined', 'rejected'], true);
+        }
+
+        $code = strtolower((string) data_get($response, 'code', ''));
+        if ($code !== '') {
+            return in_array($code, ['failed', 'failure', 'error', 'declined', 'rejected'], true);
+        }
+
+        return false;
+    }
+
+    protected function extractProviderResponseMessage(array $response, string $fallback): string
+    {
+        $candidates = [
+            data_get($response, 'message'),
+            data_get($response, 'error.message'),
+            data_get($response, 'error'),
+            data_get($response, 'data.message'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
+            }
+        }
+
+        return $fallback;
     }
 
     protected function resolveProviderCardIdFromList(string $userEmail, string $firstName, string $lastName): ?string
