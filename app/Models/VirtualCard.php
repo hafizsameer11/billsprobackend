@@ -22,10 +22,6 @@ class VirtualCard extends Model
         'card_color',
         'currency',
         'balance',
-        'daily_spending_limit',
-        'monthly_spending_limit',
-        'daily_transaction_limit',
-        'monthly_transaction_limit',
         'is_active',
         'is_frozen',
         'billing_address_street',
@@ -41,8 +37,6 @@ class VirtualCard extends Model
     {
         return [
             'balance' => 'decimal:8',
-            'daily_spending_limit' => 'decimal:8',
-            'monthly_spending_limit' => 'decimal:8',
             'is_active' => 'boolean',
             'is_frozen' => 'boolean',
             'metadata' => 'array',

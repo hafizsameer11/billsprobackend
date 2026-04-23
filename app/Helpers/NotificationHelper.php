@@ -2,6 +2,7 @@
 
 namespace App\Helpers;
 
+use App\Jobs\SendExpoPushToUserJob;
 use App\Models\Notification;
 use App\Models\User;
 
@@ -19,7 +20,7 @@ class NotificationHelper
      */
     public static function create(int $userId, string $type, string $title, string $message, ?array $metadata = null): Notification
     {
-        return Notification::create([
+        $notification = Notification::create([
             'user_id' => $userId,
             'type' => $type,
             'title' => $title,
@@ -27,6 +28,34 @@ class NotificationHelper
             'read' => false,
             'metadata' => $metadata,
         ]);
+
+        self::dispatchPushNotification($notification);
+
+        return $notification;
+    }
+
+    /**
+     * Fan out app notifications to Expo push so login, transaction, and account events
+     * can notify users outside the app as well.
+     */
+    private static function dispatchPushNotification(Notification $notification): void
+    {
+        $metadata = is_array($notification->metadata) ? $notification->metadata : [];
+        $screen = $notification->type === 'virtual_card' ? 'VirtualCards' : 'Notifications';
+
+        SendExpoPushToUserJob::dispatch(
+            (int) $notification->user_id,
+            (string) $notification->title,
+            (string) $notification->message,
+            [
+                'screen' => $screen,
+                'notification_id' => (string) $notification->id,
+                'type' => (string) $notification->type,
+                'kind' => isset($metadata['kind']) ? (string) $metadata['kind'] : null,
+                'event_id' => isset($metadata['event_target_id']) ? (string) $metadata['event_target_id'] : null,
+                'virtual_card_id' => isset($metadata['virtual_card_id']) ? (string) $metadata['virtual_card_id'] : null,
+            ]
+        );
     }
 
     /**

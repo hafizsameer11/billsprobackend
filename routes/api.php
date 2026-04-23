@@ -32,10 +32,12 @@ use App\Http\Controllers\Api\DepositController;
 use App\Http\Controllers\Api\KycController;
 use App\Http\Controllers\Api\PalmPayBillPaymentController;
 use App\Http\Controllers\Api\PalmPayDepositController;
+use App\Http\Controllers\Api\PagocardsVirtualCardWebhookController;
 use App\Http\Controllers\Api\PalmPayWebhookController;
 use App\Http\Controllers\Api\SupportController;
 use App\Http\Controllers\Api\TatumWebhookController;
 use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\PushTokenController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\VirtualCardController;
 use App\Http\Controllers\Api\WalletController;
@@ -75,6 +77,7 @@ Route::post('/webhooks/palmpay/bill-payment', [PalmPayWebhookController::class, 
 Route::post('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::get('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::post('/webhooks/tatum', [TatumWebhookController::class, 'handle']);
+Route::post('/webhooks/pagocards/virtual-cards', [PagocardsVirtualCardWebhookController::class, 'handle']);
 Route::get('/webhooks/tatum/replay/{id}', [TatumWebhookController::class, 'replay']);
 Route::get('/webhooks/tatum/replay-pending', [TatumWebhookController::class, 'replayPending']);
 
@@ -367,6 +370,8 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // VIRTUAL CARD ROUTES
     // ========================================================================
     Route::prefix('virtual-cards')->group(function () {
+        Route::get('/pending-provider-events', [VirtualCardController::class, 'pendingProviderEvents']);
+        Route::post('/provider-events/{providerEvent}/dismiss', [VirtualCardController::class, 'dismissProviderEvent']);
         Route::get('/', [VirtualCardController::class, 'index']);
         Route::get('/funding-estimate', [VirtualCardController::class, 'fundingEstimate']);
         Route::get('/creation-fee', [VirtualCardController::class, 'creationFee']);
@@ -379,10 +384,11 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/{id}/check-3ds', [VirtualCardController::class, 'check3ds']);
         Route::get('/{id}/check-wallet', [VirtualCardController::class, 'checkWallet']);
         Route::post('/{id}/approve-3ds', [VirtualCardController::class, 'approve3ds']);
+        Route::get('/{id}/spend-controls', [VirtualCardController::class, 'listSpendControls']);
+        Route::post('/{id}/spend-controls', [VirtualCardController::class, 'createSpendControl']);
+        Route::post('/{id}/delete-spend-control', [VirtualCardController::class, 'deleteSpendControl']);
         Route::get('/{id}/billing-address', [VirtualCardController::class, 'getBillingAddress']);
         Route::put('/{id}/billing-address', [VirtualCardController::class, 'updateBillingAddress']);
-        Route::get('/{id}/limits', [VirtualCardController::class, 'getLimits']);
-        Route::put('/{id}/limits', [VirtualCardController::class, 'updateLimits']);
         Route::post('/{id}/freeze', [VirtualCardController::class, 'freeze']);
         Route::post('/{id}/unfreeze', [VirtualCardController::class, 'unfreeze']);
     });
@@ -429,5 +435,8 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/notifications', [UserController::class, 'getNotifications']);
         Route::post('/notifications/{id}/read', [UserController::class, 'markNotificationAsRead']);
         Route::post('/notifications/read-all', [UserController::class, 'markAllNotificationsAsRead']);
+
+        Route::post('/push-token', [PushTokenController::class, 'store']);
+        Route::delete('/push-token', [PushTokenController::class, 'destroy']);
     });
 });

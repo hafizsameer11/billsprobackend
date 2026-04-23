@@ -36,10 +36,6 @@ class CreateCardRequest extends FormRequest
             'billing_address_state' => 'nullable|string|max:100',
             'billing_address_country' => 'nullable|string|max:100',
             'billing_address_postal_code' => 'nullable|string|max:20',
-            'daily_spending_limit' => 'nullable|numeric|min:0',
-            'monthly_spending_limit' => 'nullable|numeric|min:0',
-            'daily_transaction_limit' => 'nullable|integer|min:0',
-            'monthly_transaction_limit' => 'nullable|integer|min:0',
         ];
     }
 

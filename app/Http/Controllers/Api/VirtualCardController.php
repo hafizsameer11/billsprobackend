@@ -6,10 +6,12 @@ use App\Helpers\NotificationHelper;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
+use App\Http\Requests\VirtualCard\CreateSpendControlRequest;
+use App\Http\Requests\VirtualCard\DeleteSpendControlRequest;
 use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Http\Requests\VirtualCard\FundingEstimateRequest;
-use App\Http\Requests\VirtualCard\UpdateCardLimitsRequest;
 use App\Http\Requests\VirtualCard\WithdrawCardRequest;
+use App\Models\VirtualCardProviderWebhookEvent;
 use App\Services\VirtualCard\VirtualCardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -460,73 +462,6 @@ class VirtualCardController extends Controller
     }
 
     /**
-     * Get card limits
-     */
-    #[OA\Get(path: '/api/virtual-cards/{id}/limits', summary: 'Get card limits', description: 'App-level spending/transaction limits stored on the local card row.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
-    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
-    #[OA\Response(response: 200, description: 'Card limits retrieved successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
-    #[OA\Response(response: 404, description: 'Card not found')]
-    #[OA\Response(response: 401, description: 'Unauthenticated')]
-    public function getLimits(Request $request, int $id): JsonResponse
-    {
-        try {
-            $card = $this->virtualCardService->getCard($request->user()->id, $id);
-
-            if (! $card) {
-                return ResponseHelper::notFound('Virtual card not found');
-            }
-
-            $limits = [
-                'daily' => [
-                    'spending_limit' => $card->daily_spending_limit,
-                    'transaction_limit' => $card->daily_transaction_limit,
-                ],
-                'monthly' => [
-                    'spending_limit' => $card->monthly_spending_limit,
-                    'transaction_limit' => $card->monthly_transaction_limit,
-                ],
-            ];
-
-            return ResponseHelper::success($limits, 'Card limits retrieved successfully.');
-        } catch (\Exception $e) {
-            Log::error('Get card limits error: '.$e->getMessage(), [
-                'user_id' => $request->user()->id,
-                'card_id' => $id,
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return ResponseHelper::serverError('An error occurred while retrieving card limits. Please try again.');
-        }
-    }
-
-    /**
-     * Update card limits
-     */
-    #[OA\Put(path: '/api/virtual-cards/{id}/limits', summary: 'Update card limits', description: 'Updates local limit fields only; provider-side limits may differ.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
-    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
-    #[OA\RequestBody(required: false, content: new OA\JsonContent(properties: [new OA\Property(property: 'daily_spending_limit', type: 'number', nullable: true), new OA\Property(property: 'monthly_spending_limit', type: 'number', nullable: true), new OA\Property(property: 'daily_transaction_limit', type: 'integer', nullable: true), new OA\Property(property: 'monthly_transaction_limit', type: 'integer', nullable: true)]))]
-    #[OA\Response(response: 200, description: 'Card limits updated successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
-    #[OA\Response(response: 404, description: 'Card not found')]
-    #[OA\Response(response: 401, description: 'Unauthenticated')]
-    #[OA\Response(response: 422, description: 'Validation error')]
-    public function updateLimits(UpdateCardLimitsRequest $request, int $id): JsonResponse
-    {
-        try {
-            $card = $this->virtualCardService->updateCardLimits($request->user()->id, $id, $request->validated());
-
-            return ResponseHelper::success($card, 'Card limits updated successfully.');
-        } catch (\Exception $e) {
-            Log::error('Update card limits error: '.$e->getMessage(), [
-                'user_id' => $request->user()->id,
-                'card_id' => $id,
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return ResponseHelper::serverError('An error occurred while updating card limits. Please try again.');
-        }
-    }
-
-    /**
      * Freeze card
      */
     #[OA\Post(path: '/api/virtual-cards/{id}/freeze', summary: 'Block (freeze) card', description: 'Calls provider **block digital** (`blockdigital`); sets local `is_frozen`.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
@@ -719,10 +654,17 @@ class VirtualCardController extends Controller
         ]);
 
         try {
-            $result = $this->virtualCardService->approve3ds($request->user()->id, $id, (string) $request->input('event_id'));
+            $eventId = (string) $request->input('event_id');
+            $result = $this->virtualCardService->approve3ds($request->user()->id, $id, $eventId);
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Unable to approve 3DS', 400);
             }
+
+            $this->virtualCardService->markPagocardsWebhook3dsEventCompleted(
+                $request->user()->id,
+                $id,
+                $eventId
+            );
 
             return ResponseHelper::success($result['data'], $result['message'] ?? '3DS approved successfully.');
         } catch (\Exception $e) {
@@ -734,5 +676,181 @@ class VirtualCardController extends Controller
 
             return ResponseHelper::serverError('An error occurred while approving 3DS. Please try again.');
         }
+    }
+
+    /**
+     * List spend controls from Pagocards (parsed from getcarddetails response after a live refresh).
+     */
+    #[OA\Get(
+        path: '/api/virtual-cards/{id}/spend-controls',
+        summary: 'List spend controls',
+        description: 'Calls provider getcarddetails, then returns `spend_controls` parsed from the response (empty array if none or unknown shape).',
+        security: [['sanctum' => []]],
+        tags: ['Virtual Cards'],
+    )]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
+    #[OA\Response(response: 200, description: 'Spend controls returned', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 404, description: 'Card not found')]
+    #[OA\Response(response: 401, description: 'Unauthenticated')]
+    public function listSpendControls(Request $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->listSpendControls($request->user()->id, $id);
+            if (! ($result['success'] ?? false)) {
+                $status = (int) ($result['status'] ?? 404);
+
+                return $status === 404
+                    ? ResponseHelper::notFound($result['message'] ?? 'Virtual card not found')
+                    : ResponseHelper::error($result['message'] ?? 'Unable to load spend controls', $status);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Spend controls retrieved successfully.');
+        } catch (\Exception $e) {
+            Log::error('List spend controls error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while loading spend controls. Please try again.');
+        }
+    }
+
+    /**
+     * Create a provider spend control (Pagocards `POST /mastercard/spendcontrol`).
+     */
+    #[OA\Post(
+        path: '/api/virtual-cards/{id}/spend-controls',
+        summary: 'Create spend control',
+        description: 'Creates a spending control on the provider card (`purchase` or `blockedMcc`, `daily`/`monthly`/`yearly`).',
+        security: [['sanctum' => []]],
+        tags: ['Virtual Cards'],
+    )]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\JsonContent(
+            required: ['description', 'type', 'period', 'limit'],
+            properties: [
+                new OA\Property(property: 'description', type: 'string', example: 'Daily online spending'),
+                new OA\Property(property: 'type', type: 'string', enum: ['purchase', 'blockedMcc']),
+                new OA\Property(property: 'period', type: 'string', enum: ['daily', 'monthly', 'yearly']),
+                new OA\Property(property: 'limit', type: 'number', example: 100),
+            ]
+        )
+    )]
+    #[OA\Response(response: 200, description: 'Spend control created', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 400, description: 'Provider rejected request')]
+    #[OA\Response(response: 401, description: 'Unauthenticated')]
+    #[OA\Response(response: 422, description: 'Validation error')]
+    public function createSpendControl(CreateSpendControlRequest $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->createSpendControl(
+                $request->user()->id,
+                $id,
+                $request->validated()
+            );
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to create spend control', 400);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Spend control created successfully.');
+        } catch (\Exception $e) {
+            Log::error('Create spend control error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while creating the spend control. Please try again.');
+        }
+    }
+
+    /**
+     * Delete a provider spend control (Pagocards `POST /mastercard/deletespendcontrol`).
+     */
+    #[OA\Post(
+        path: '/api/virtual-cards/{id}/delete-spend-control',
+        summary: 'Delete spend control',
+        description: 'Removes an existing spending control using the provider `controlid`.',
+        security: [['sanctum' => []]],
+        tags: ['Virtual Cards'],
+    )]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\JsonContent(
+            required: ['control_id'],
+            properties: [new OA\Property(property: 'control_id', type: 'string', example: 'ctrl_xxxxxxxxxxxx')]
+        )
+    )]
+    #[OA\Response(response: 200, description: 'Spend control deleted', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 400, description: 'Provider rejected request')]
+    #[OA\Response(response: 401, description: 'Unauthenticated')]
+    #[OA\Response(response: 422, description: 'Validation error')]
+    public function deleteSpendControl(DeleteSpendControlRequest $request, int $id): JsonResponse
+    {
+        try {
+            $controlId = (string) $request->validated('control_id');
+            $result = $this->virtualCardService->deleteSpendControl(
+                $request->user()->id,
+                $id,
+                $controlId
+            );
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to delete spend control', 400);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Spend control deleted successfully.');
+        } catch (\Exception $e) {
+            Log::error('Delete spend control error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while deleting the spend control. Please try again.');
+        }
+    }
+
+    /**
+     * Pending Pagocards-driven events (3DS, wallet tokenization) for the authenticated user.
+     */
+    public function pendingProviderEvents(Request $request): JsonResponse
+    {
+        try {
+            $items = $this->virtualCardService->listPendingPagocardsProviderEvents($request->user()->id);
+
+            return ResponseHelper::success($items, 'Pending provider events retrieved.');
+        } catch (\Exception $e) {
+            Log::error('Pending provider events error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('Unable to load pending events.');
+        }
+    }
+
+    /**
+     * Dismiss a pending provider webhook event (e.g. user declines to act or clears wallet prompt).
+     */
+    public function dismissProviderEvent(Request $request, VirtualCardProviderWebhookEvent $providerEvent): JsonResponse
+    {
+        if ((int) $providerEvent->user_id !== (int) $request->user()->id) {
+            return ResponseHelper::error('Forbidden', 403);
+        }
+
+        $result = $this->virtualCardService->dismissPagocardsProviderEvent(
+            $request->user()->id,
+            (int) $providerEvent->id
+        );
+
+        if (! $result['success']) {
+            return ResponseHelper::error($result['message'], 400);
+        }
+
+        return ResponseHelper::success(null, $result['message']);
     }
 }

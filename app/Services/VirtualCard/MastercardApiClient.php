@@ -100,6 +100,22 @@ class MastercardApiClient
     /**
      * @throws MastercardApiException
      */
+    public function spendControl(array $payload): array
+    {
+        return $this->requestMerchant('merchant_master_spend_control', $payload);
+    }
+
+    /**
+     * @throws MastercardApiException
+     */
+    public function deleteSpendControl(array $payload): array
+    {
+        return $this->requestMerchant('merchant_master_delete_spend_control', $payload);
+    }
+
+    /**
+     * @throws MastercardApiException
+     */
     protected function requestMerchant(string $endpointKey, array $payload): array
     {
         $path = (string) config("mastercard.endpoints.{$endpointKey}");

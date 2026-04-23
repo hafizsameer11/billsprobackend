@@ -8,6 +8,7 @@ use App\Models\PlatformRate;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\VirtualCard;
+use App\Models\VirtualCardProviderWebhookEvent;
 use App\Models\VirtualCardTransaction;
 use App\Services\Crypto\CryptoWalletService;
 use App\Services\Platform\PlatformRateResolver;
@@ -154,10 +155,6 @@ class VirtualCardService
                         'billing_address_state' => $data['billing_address_state'] ?? null,
                         'billing_address_country' => $data['billing_address_country'] ?? null,
                         'billing_address_postal_code' => $data['billing_address_postal_code'] ?? null,
-                        'daily_spending_limit' => $data['daily_spending_limit'] ?? null,
-                        'monthly_spending_limit' => $data['monthly_spending_limit'] ?? null,
-                        'daily_transaction_limit' => $data['daily_transaction_limit'] ?? null,
-                        'monthly_transaction_limit' => $data['monthly_transaction_limit'] ?? null,
                         'metadata' => [
                             'source' => 'provider',
                             'provider_account_email' => (string) $accountEmail,
@@ -925,25 +922,6 @@ class VirtualCardService
     }
 
     /**
-     * Update card limits
-     */
-    public function updateCardLimits(int $userId, int $cardId, array $data): VirtualCard
-    {
-        $card = VirtualCard::where('id', $cardId)
-            ->where('user_id', $userId)
-            ->firstOrFail();
-
-        $card->update([
-            'daily_spending_limit' => $data['daily_spending_limit'] ?? $card->daily_spending_limit,
-            'monthly_spending_limit' => $data['monthly_spending_limit'] ?? $card->monthly_spending_limit,
-            'daily_transaction_limit' => $data['daily_transaction_limit'] ?? $card->daily_transaction_limit,
-            'monthly_transaction_limit' => $data['monthly_transaction_limit'] ?? $card->monthly_transaction_limit,
-        ]);
-
-        return $card->fresh();
-    }
-
-    /**
      * Terminate card via provider.
      */
     public function terminateCard(int $userId, int $cardId): array
@@ -1007,6 +985,149 @@ class VirtualCardService
             $cardId,
             fn (array $payload) => $this->mastercardApiClient->approve3ds(array_merge($payload, ['eventId' => $eventId]))
         );
+    }
+
+    /**
+     * Refreshes card from Pagocards getcarddetails and returns normalized spend controls parsed from the response.
+     *
+     * @return array{success: bool, message?: string, status?: int, data?: array{spend_controls: list<array<string, mixed>>}}
+     */
+    public function listSpendControls(int $userId, int $cardId): array
+    {
+        $card = $this->getCard($userId, $cardId);
+        if (! $card) {
+            return [
+                'success' => false,
+                'message' => 'Virtual card not found.',
+                'status' => 404,
+            ];
+        }
+
+        $payload = is_array($card->provider_payload) ? $card->provider_payload : [];
+
+        return [
+            'success' => true,
+            'message' => 'Spend controls retrieved successfully.',
+            'data' => [
+                'spend_controls' => $this->extractSpendControlsFromProviderResponse($payload),
+            ],
+        ];
+    }
+
+    /**
+     * @param  array{description: string, type: string, period: string, limit: float|int|string}  $input
+     */
+    public function createSpendControl(int $userId, int $cardId, array $input): array
+    {
+        $limit = is_numeric($input['limit']) ? 0 + $input['limit'] : 0;
+
+        return $this->invokeProviderCardAction(
+            $userId,
+            $cardId,
+            fn (array $payload) => $this->mastercardApiClient->spendControl(array_merge($payload, [
+                'description' => (string) $input['description'],
+                'type' => (string) $input['type'],
+                'period' => (string) $input['period'],
+                'limit' => $limit,
+            ])),
+            'spend_control_create'
+        );
+    }
+
+    public function deleteSpendControl(int $userId, int $cardId, string $controlId): array
+    {
+        return $this->invokeProviderCardAction(
+            $userId,
+            $cardId,
+            fn (array $payload) => $this->mastercardApiClient->deleteSpendControl(array_merge($payload, [
+                'controlid' => $controlId,
+            ])),
+            'spend_control_delete'
+        );
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function listPendingPagocardsProviderEvents(int $userId): array
+    {
+        $rows = VirtualCardProviderWebhookEvent::query()
+            ->where('user_id', $userId)
+            ->where('status', VirtualCardProviderWebhookEvent::STATUS_PENDING)
+            ->whereIn('event_name', [
+                PagocardsVirtualCardWebhookService::EVENT_3DS_CREATED,
+                PagocardsVirtualCardWebhookService::EVENT_TOKENIZATION,
+            ])
+            ->orderByDesc('id')
+            ->limit(50)
+            ->get();
+
+        return $rows->map(static function (VirtualCardProviderWebhookEvent $e): array {
+            return [
+                'id' => $e->id,
+                'external_event_id' => $e->external_event_id,
+                'event_name' => $e->event_name,
+                'event_target_id' => $e->event_target_id,
+                'virtual_card_id' => $e->virtual_card_id,
+                'status' => $e->status,
+                'payload' => $e->payload,
+                'created_at' => $e->created_at?->toIso8601String(),
+            ];
+        })->values()->all();
+    }
+
+    /**
+     * @return array{success: bool, message: string}
+     */
+    public function dismissPagocardsProviderEvent(int $userId, int $providerEventId): array
+    {
+        $row = VirtualCardProviderWebhookEvent::query()
+            ->where('id', $providerEventId)
+            ->where('user_id', $userId)
+            ->where('status', VirtualCardProviderWebhookEvent::STATUS_PENDING)
+            ->first();
+
+        if (! $row) {
+            return ['success' => false, 'message' => 'Pending event not found.'];
+        }
+
+        $row->update([
+            'status' => VirtualCardProviderWebhookEvent::STATUS_DISMISSED,
+            'processed_at' => now(),
+        ]);
+
+        return ['success' => true, 'message' => 'Event dismissed.'];
+    }
+
+    public function markPagocardsWebhook3dsEventCompleted(int $userId, int $virtualCardId, string $eventTargetId): void
+    {
+        if ($eventTargetId === '') {
+            return;
+        }
+
+        VirtualCardProviderWebhookEvent::query()
+            ->where('user_id', $userId)
+            ->where('virtual_card_id', $virtualCardId)
+            ->where('event_target_id', $eventTargetId)
+            ->where('event_name', PagocardsVirtualCardWebhookService::EVENT_3DS_CREATED)
+            ->where('status', VirtualCardProviderWebhookEvent::STATUS_PENDING)
+            ->update([
+                'status' => VirtualCardProviderWebhookEvent::STATUS_COMPLETED,
+                'processed_at' => now(),
+            ]);
+    }
+
+    public function markPagocardsWebhookWalletEventCompleted(int $userId, int $providerEventId): void
+    {
+        VirtualCardProviderWebhookEvent::query()
+            ->where('id', $providerEventId)
+            ->where('user_id', $userId)
+            ->where('event_name', PagocardsVirtualCardWebhookService::EVENT_TOKENIZATION)
+            ->where('status', VirtualCardProviderWebhookEvent::STATUS_PENDING)
+            ->update([
+                'status' => VirtualCardProviderWebhookEvent::STATUS_COMPLETED,
+                'processed_at' => now(),
+            ]);
     }
 
     protected function invokeProviderCardAction(
@@ -1262,6 +1383,109 @@ class VirtualCardService
     protected function extractStatus(array $response, ?string $fallback = 'active'): string
     {
         return (string) (data_get($response, 'data.status') ?? data_get($response, 'status') ?? $fallback ?? 'active');
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function extractSpendControlsFromProviderResponse(array $response): array
+    {
+        foreach ($this->spendControlListRoots($response) as $maybe) {
+            if (! is_array($maybe)) {
+                continue;
+            }
+            $isAssoc = array_keys($maybe) !== range(0, count($maybe) - 1);
+            if ($isAssoc) {
+                if ($this->looksLikeSpendControlRow($maybe)) {
+                    return [$this->normalizeSpendControlRow($maybe)];
+                }
+
+                continue;
+            }
+            $rows = [];
+            foreach ($maybe as $row) {
+                if (is_array($row) && $this->looksLikeSpendControlRow($row)) {
+                    $rows[] = $this->normalizeSpendControlRow($row);
+                }
+            }
+            if ($rows !== []) {
+                return $rows;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<mixed>
+     */
+    protected function spendControlListRoots(array $response): array
+    {
+        $keys = [
+            'spendControls', 'spendcontrols', 'spend_controls', 'controls', 'controlList', 'controllist',
+            'spendingControls', 'spending_controls',
+        ];
+        $out = [];
+        $data = data_get($response, 'data');
+        if (is_array($data)) {
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $data)) {
+                    $out[] = $data[$key];
+                }
+            }
+            $card = $data['card'] ?? null;
+            if (is_array($card)) {
+                foreach ($keys as $key) {
+                    if (array_key_exists($key, $card)) {
+                        $out[] = $card[$key];
+                    }
+                }
+            }
+        }
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $response)) {
+                $out[] = $response[$key];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    protected function looksLikeSpendControlRow(array $row): bool
+    {
+        if ($row === []) {
+            return false;
+        }
+        foreach (['controlid', 'controlId', 'control_id', 'id'] as $h) {
+            if (! empty($row[$h]) && is_scalar($row[$h])) {
+                return true;
+            }
+        }
+        if (array_key_exists('limit', $row) || array_key_exists('period', $row) || array_key_exists('type', $row)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    protected function normalizeSpendControlRow(array $row): array
+    {
+        $cid = $row['controlid'] ?? $row['controlId'] ?? $row['control_id'] ?? $row['id'] ?? '';
+
+        return [
+            'control_id' => is_scalar($cid) ? (string) $cid : '',
+            'description' => (string) ($row['description'] ?? ''),
+            'type' => (string) ($row['type'] ?? ''),
+            'period' => (string) ($row['period'] ?? ''),
+            'limit' => $row['limit'] ?? null,
+        ];
     }
 
     protected function extractCardsFromListResponse(array $response): array

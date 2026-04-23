@@ -161,4 +161,12 @@ class User extends Authenticatable
     {
         return $this->hasMany(Notification::class);
     }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany<UserExpoPushToken, $this>
+     */
+    public function expoPushTokens()
+    {
+        return $this->hasMany(UserExpoPushToken::class);
+    }
 }
