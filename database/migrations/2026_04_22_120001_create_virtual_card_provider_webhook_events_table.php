@@ -22,9 +22,10 @@ return new class extends Migration
             $table->timestamp('processed_at')->nullable();
             $table->timestamps();
 
-            $table->index(['user_id', 'status']);
-            $table->index(['virtual_card_id', 'status']);
-            $table->index('event_name');
+            $table->index(['user_id', 'status'], 'vc_pwebhook_ev_user_status_idx');
+            // Default name exceeds MySQL 64-char identifier limit (virtual_card_id is long).
+            $table->index(['virtual_card_id', 'status'], 'vc_pwebhook_ev_card_status_idx');
+            $table->index('event_name', 'vc_pwebhook_ev_event_name_idx');
         });
     }
 
