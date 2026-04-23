@@ -43,7 +43,7 @@ class NotificationHelper
         $metadata = is_array($notification->metadata) ? $notification->metadata : [];
         $screen = $notification->type === 'virtual_card' ? 'VirtualCards' : 'Notifications';
 
-        SendExpoPushToUserJob::dispatch(
+        $pending = SendExpoPushToUserJob::dispatch(
             (int) $notification->user_id,
             (string) $notification->title,
             (string) $notification->message,
@@ -56,6 +56,11 @@ class NotificationHelper
                 'virtual_card_id' => isset($metadata['virtual_card_id']) ? (string) $metadata['virtual_card_id'] : null,
             ]
         );
+
+        // Login completes before the app POSTs `/user/push-token`; delay so Expo tokens are usually saved first.
+        if ($notification->type === 'login') {
+            $pending->delay(now()->addSeconds(5));
+        }
     }
 
     /**

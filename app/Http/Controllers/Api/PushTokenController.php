@@ -20,17 +20,26 @@ class PushTokenController extends Controller
 
         $user = $request->user();
 
-        UserExpoPushToken::query()->updateOrCreate(
-            ['expo_push_token' => $data['expo_push_token']],
-            [
-                'user_id' => $user->id,
-                'platform' => $data['platform'] ?? null,
-                'device_id' => $data['device_id'] ?? null,
-                'last_seen_at' => now(),
-            ]
-        );
+        // One row per Expo token (global unique). Same device re-login updates this row — no duplicate tokens.
+        $token = UserExpoPushToken::query()->firstOrNew([
+            'expo_push_token' => $data['expo_push_token'],
+        ]);
+        $wasNew = ! $token->exists;
+        $token->fill([
+            'user_id' => $user->id,
+            'platform' => $data['platform'] ?? null,
+            'device_id' => $data['device_id'] ?? null,
+            'last_seen_at' => now(),
+        ]);
+        $token->save();
 
-        return ResponseHelper::success(null, 'Push token registered.');
+        $message = $wasNew
+            ? 'Push token registered.'
+            : 'Push token refreshed (same device; no duplicate rows).';
+
+        return ResponseHelper::success([
+            'was_new' => $wasNew,
+        ], $message);
     }
 
     public function destroy(Request $request): JsonResponse
