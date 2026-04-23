@@ -49,6 +49,16 @@ class ApplicationLog extends Model
         }
     }
 
+    public static function info(string $channel, string $message, array $context = []): void
+    {
+        self::write(Level::Info, $channel, $message, $context);
+    }
+
+    public static function error(string $channel, string $message, array $context = []): void
+    {
+        self::write(Level::Error, $channel, $message, $context);
+    }
+
     public static function warning(string $channel, string $message, array $context = []): void
     {
         self::write(Level::Warning, $channel, $message, $context);
