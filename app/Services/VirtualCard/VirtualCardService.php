@@ -1643,23 +1643,75 @@ class VirtualCardService
             ?? ($amount + $fee)
         );
 
+        $merchant = is_array($providerTransaction['merchant'] ?? null) ? $providerTransaction['merchant'] : [];
+        $merchantName = trim((string) ($merchant['name'] ?? ''));
+        $merchantCity = trim((string) ($merchant['city'] ?? ''));
+        $merchantCountry = trim((string) ($merchant['country'] ?? ''));
+        $merchantMcc = trim((string) ($merchant['mcc'] ?? ''));
+        $merchantMid = trim((string) ($merchant['mid'] ?? ''));
+
+        $merchantAmountRaw = $providerTransaction['merchantAmount'] ?? $providerTransaction['merchant_amount'] ?? null;
+        $merchantCurrency = (string) ($providerTransaction['merchantCurrency'] ?? $providerTransaction['merchant_currency'] ?? '');
+        $paymentAt = $providerTransaction['paymentDateTime']
+            ?? $providerTransaction['payment_datetime']
+            ?? $providerTransaction['createdAt']
+            ?? $providerTransaction['created_at']
+            ?? null;
+        $declineReason = trim((string) ($providerTransaction['declineReason'] ?? $providerTransaction['decline_reason'] ?? ''));
+
+        $descriptionParts = [];
+        if ($merchantName !== '') {
+            $descriptionParts[] = $merchantName;
+        }
+        $loc = trim(implode(', ', array_filter([$merchantCity, $merchantCountry], static fn ($s) => $s !== '')));
+        if ($loc !== '') {
+            $descriptionParts[] = $loc;
+        }
+        $description = $descriptionParts !== []
+            ? implode(' · ', $descriptionParts)
+            : (string) ($providerTransaction['description'] ?? $providerTransaction['narration'] ?? 'Card payment');
+        if ($declineReason !== '') {
+            $description .= ' ('.$declineReason.')';
+        }
+
+        $rawStatus = strtolower((string) ($providerTransaction['status'] ?? $providerTransaction['transaction_status'] ?? ''));
+        $status = match ($rawStatus) {
+            'complete', 'completed', 'success', 'successful' => 'completed',
+            'rejected', 'declined', 'failed', 'cancelled' => 'failed',
+            'pending', 'processing' => 'pending',
+            default => $rawStatus !== '' ? $rawStatus : 'pending',
+        };
+
+        $metadata = array_filter([
+            'source' => 'pagocards_card_details',
+            'provider_created_at' => $providerTransaction['created_at']
+                ?? $providerTransaction['createdAt']
+                ?? $providerTransaction['date']
+                ?? $providerTransaction['timestamp']
+                ?? null,
+            'payment_datetime' => $paymentAt,
+            'decline_reason' => $declineReason !== '' ? $declineReason : null,
+            'merchant_name' => $merchantName !== '' ? $merchantName : null,
+            'merchant_city' => $merchantCity !== '' ? $merchantCity : null,
+            'merchant_country' => $merchantCountry !== '' ? $merchantCountry : null,
+            'merchant_mcc' => $merchantMcc !== '' ? $merchantMcc : null,
+            'merchant_mid' => $merchantMid !== '' ? $merchantMid : null,
+            'merchant_amount' => $merchantAmountRaw !== null && $merchantAmountRaw !== '' ? $merchantAmountRaw : null,
+            'merchant_currency' => $merchantCurrency !== '' ? $merchantCurrency : null,
+            'merchant' => $merchant !== [] ? $merchant : null,
+        ], static fn ($v) => $v !== null && $v !== '');
+
         return [
             'provider_transaction_id' => $providerTxId,
             'type' => (string) ($providerTransaction['type'] ?? $providerTransaction['transaction_type'] ?? 'provider'),
-            'status' => (string) ($providerTransaction['status'] ?? $providerTransaction['transaction_status'] ?? 'completed'),
+            'status' => $status,
             'currency' => (string) ($providerTransaction['currency'] ?? $providerTransaction['curr'] ?? 'USD'),
             'amount' => $amount,
             'fee' => $fee,
             'total_amount' => $total,
-            'reference' => (string) ($providerTransaction['reference'] ?? $providerTransaction['rrn'] ?? null),
-            'description' => (string) ($providerTransaction['description'] ?? $providerTransaction['narration'] ?? 'Provider card transaction'),
-            'metadata' => [
-                'provider_created_at' => $providerTransaction['created_at']
-                    ?? $providerTransaction['createdAt']
-                    ?? $providerTransaction['date']
-                    ?? $providerTransaction['timestamp']
-                    ?? null,
-            ],
+            'reference' => (string) ($providerTransaction['reference'] ?? $providerTransaction['rrn'] ?? $providerTxId),
+            'description' => $description,
+            'metadata' => $metadata,
         ];
     }
 
@@ -1676,6 +1728,19 @@ class VirtualCardService
             }
 
             return (float) $clean;
+        }
+
+        if (is_array($value)) {
+            $sum = 0.0;
+            foreach ($value as $nested) {
+                if (is_numeric($nested)) {
+                    $sum += (float) $nested;
+                } elseif (is_array($nested)) {
+                    $sum += $this->parseMoney($nested);
+                }
+            }
+
+            return $sum;
         }
 
         return 0.0;

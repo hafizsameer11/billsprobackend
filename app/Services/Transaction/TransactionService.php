@@ -280,6 +280,10 @@ class TransactionService
                     $cardTransactionQuery->where('type', 'fund');
                 } elseif ($type === 'withdrawal' || $type === 'card_withdrawal') {
                     $cardTransactionQuery->where('type', 'withdraw');
+                } elseif (in_array($type, ['card_payment', 'payment'], true)) {
+                    $cardTransactionQuery->whereIn('type', ['payment', 'refund']);
+                } elseif (in_array($type, ['card_refund', 'refund'], true)) {
+                    $cardTransactionQuery->where('type', 'refund');
                 } else {
                     $cardTransactionQuery->where('type', $type);
                 }
