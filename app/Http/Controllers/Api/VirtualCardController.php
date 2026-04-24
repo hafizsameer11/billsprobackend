@@ -401,15 +401,10 @@ class VirtualCardController extends Controller
                 return ResponseHelper::notFound('Virtual card not found');
             }
 
-            $billingAddress = [
-                'street' => $card->billing_address_street,
-                'city' => $card->billing_address_city,
-                'state' => $card->billing_address_state,
-                'country' => $card->billing_address_country,
-                'postal_code' => $card->billing_address_postal_code,
-            ];
-
-            return ResponseHelper::success($billingAddress, 'Billing address retrieved successfully.');
+            return ResponseHelper::success(
+                $this->virtualCardService->programBillingAddressForApp(),
+                'Billing address retrieved successfully.'
+            );
         } catch (\Exception $e) {
             Log::error('Get billing address error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,

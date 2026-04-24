@@ -48,19 +48,46 @@ class WithdrawalService
     public function addBankAccount(int $userId, array $data): BankAccount
     {
         try {
-            // Check if account already exists for this user
-            $existingAccount = BankAccount::where('user_id', $userId)
-                ->where('account_number', $data['account_number'])
-                ->first();
-
-            if ($existingAccount) {
-                throw new \Exception('Bank account already exists');
-            }
-
-            // Check if this is the first account for the user (set as default)
-            $hasExistingAccounts = BankAccount::where('user_id', $userId)
+            $hasActiveAccounts = BankAccount::where('user_id', $userId)
                 ->where('is_active', true)
                 ->exists();
+
+            // Delete is a soft-deactivate; same account_number still exists in DB.
+            // Reactivate and refresh bank details instead of failing unique (user_id, account_number).
+            $inactiveSame = BankAccount::where('user_id', $userId)
+                ->where('account_number', $data['account_number'])
+                ->where('is_active', false)
+                ->first();
+
+            if ($inactiveSame) {
+                $inactiveSame->update([
+                    'bank_name' => $data['bank_name'],
+                    'bank_code' => $data['bank_code'] ?? null,
+                    'account_name' => $data['account_name'],
+                    'currency' => $data['currency'] ?? 'NGN',
+                    'country_code' => $data['country_code'] ?? 'NG',
+                    'is_active' => true,
+                    'is_default' => ! $hasActiveAccounts,
+                    'metadata' => array_key_exists('metadata', $data) ? $data['metadata'] : $inactiveSame->metadata,
+                ]);
+
+                if (! $hasActiveAccounts) {
+                    BankAccount::where('user_id', $userId)
+                        ->where('id', '!=', $inactiveSame->id)
+                        ->update(['is_default' => false]);
+                }
+
+                return $inactiveSame->fresh();
+            }
+
+            $existingActive = BankAccount::where('user_id', $userId)
+                ->where('account_number', $data['account_number'])
+                ->where('is_active', true)
+                ->first();
+
+            if ($existingActive) {
+                throw new \Exception('Bank account already exists');
+            }
 
             return BankAccount::create([
                 'user_id' => $userId,
@@ -71,7 +98,7 @@ class WithdrawalService
                 'currency' => $data['currency'] ?? 'NGN',
                 'country_code' => $data['country_code'] ?? 'NG',
                 'is_active' => true,
-                'is_default' => ! $hasExistingAccounts, // Set as default if first account
+                'is_default' => ! $hasActiveAccounts, // Set as default if first account
                 'metadata' => $data['metadata'] ?? null,
             ]);
         } catch (\Illuminate\Database\QueryException $e) {
@@ -110,6 +137,7 @@ class WithdrawalService
             $existingAccount = BankAccount::where('user_id', $userId)
                 ->where('account_number', $data['account_number'])
                 ->where('id', '!=', $bankAccountId)
+                ->where('is_active', true)
                 ->first();
 
             if ($existingAccount) {

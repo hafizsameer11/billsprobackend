@@ -1,5 +1,17 @@
 <?php
 
+/*
+| PHP does not interpolate "${APP_NAME}" inside other .env values (unlike Docker Compose).
+| If MAIL_FROM_NAME is missing, empty, or still contains "${...}", fall back to APP_NAME, then Billspro.
+*/
+$mailFromName = (string) env('MAIL_FROM_NAME', '');
+if ($mailFromName === '' || str_contains($mailFromName, '${')) {
+    $mailFromName = (string) env('APP_NAME', '');
+}
+if ($mailFromName === '' || str_contains($mailFromName, '${')) {
+    $mailFromName = 'Billspro';
+}
+
 return [
 
     /*
@@ -110,7 +122,7 @@ return [
 
     'from' => [
         'address' => env('MAIL_FROM_ADDRESS', 'hello@example.com'),
-        'name' => env('MAIL_FROM_NAME', 'Example'),
+        'name' => $mailFromName,
     ],
 
 ];

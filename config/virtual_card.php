@@ -25,4 +25,16 @@ return [
     'fund_include_provider_load_fee' => filter_var(env('VIRTUAL_CARD_FUND_INCLUDE_PROVIDER_LOAD_FEE', false), FILTER_VALIDATE_BOOLEAN),
     'fund_load_flat_fee_usd' => (float) env('VIRTUAL_CARD_FUND_LOAD_FLAT_FEE_USD', 1.0),
     'fund_load_percent' => (float) env('VIRTUAL_CARD_FUND_LOAD_PERCENT', 1.0),
+
+    /*
+    | Pagocards program billing — same for every card (issuer requirement).
+    | Override via env if the program address changes.
+    */
+    'program_billing' => [
+        'billing_address_street' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_STREET', '128 city road'),
+        'billing_address_city' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_CITY', 'london'),
+        'billing_address_state' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_STATE', 'london'),
+        'billing_address_country' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_COUNTRY', 'GB'),
+        'billing_address_postal_code' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_POSTAL', 'ec1v2nx'),
+    ],
 ];

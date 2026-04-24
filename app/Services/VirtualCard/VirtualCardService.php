@@ -26,6 +26,66 @@ class VirtualCardService
     ) {}
 
     /**
+     * Pagocards-supported billing columns (same for all cards).
+     *
+     * @return array{
+     *     billing_address_street: string,
+     *     billing_address_city: string,
+     *     billing_address_state: string,
+     *     billing_address_country: string,
+     *     billing_address_postal_code: string
+     * }
+     */
+    public function pagocardsProgramBillingColumns(): array
+    {
+        $b = config('virtual_card.program_billing', []);
+
+        return [
+            'billing_address_street' => (string) ($b['billing_address_street'] ?? '128 city road'),
+            'billing_address_city' => (string) ($b['billing_address_city'] ?? 'london'),
+            'billing_address_state' => (string) ($b['billing_address_state'] ?? 'london'),
+            'billing_address_country' => (string) ($b['billing_address_country'] ?? 'GB'),
+            'billing_address_postal_code' => (string) ($b['billing_address_postal_code'] ?? 'ec1v2nx'),
+        ];
+    }
+
+    /**
+     * Shape returned by GET /virtual-cards/{id}/billing-address (always program address).
+     *
+     * @return array{street: string, city: string, state: string, country: string, postal_code: string}
+     */
+    public function programBillingAddressForApp(): array
+    {
+        $b = $this->pagocardsProgramBillingColumns();
+
+        return [
+            'street' => $b['billing_address_street'],
+            'city' => $b['billing_address_city'],
+            'state' => $b['billing_address_state'],
+            'country' => $b['billing_address_country'],
+            'postal_code' => $b['billing_address_postal_code'],
+        ];
+    }
+
+    /**
+     * Persist program billing on the card row when any field is missing (legacy rows).
+     */
+    public function ensurePagocardsBillingPersisted(VirtualCard $card): void
+    {
+        $p = $this->pagocardsProgramBillingColumns();
+        $empty = static fn (?string $v): bool => trim((string) ($v ?? '')) === '';
+        if (
+            $empty($card->billing_address_street)
+            || $empty($card->billing_address_city)
+            || $empty($card->billing_address_state)
+            || $empty($card->billing_address_country)
+            || $empty($card->billing_address_postal_code)
+        ) {
+            $card->update($p);
+        }
+    }
+
+    /**
      * Create provider-backed virtual Mastercard
      */
     public function createCard(int $userId, array $data): array
@@ -86,6 +146,13 @@ class VirtualCardService
         try {
             $response = $this->mastercardApiClient->createMerchantMasterCard($payload);
         } catch (MastercardApiException $exception) {
+            ApplicationLog::warning('virtual_card', 'virtual_card.create.provider_exception', [
+                'user_id' => $userId,
+                'http_status' => $exception->getHttpStatus(),
+                'message' => $exception->getMessage(),
+                'context' => $exception->getContext(),
+            ]);
+
             return [
                 'success' => false,
                 'message' => $exception->getMessage(),
@@ -103,6 +170,12 @@ class VirtualCardService
         }
 
         if (! $resolvedProviderCardId) {
+            ApplicationLog::warning('virtual_card', 'virtual_card.create.provider_card_id_unresolved', [
+                'user_id' => $userId,
+                'provider_account_email' => $accountEmail,
+                'provider_response' => $this->sanitizeProviderPayloadForLog($response),
+            ]);
+
             return [
                 'success' => false,
                 'message' => 'Card was issued but provider card ID could not be resolved. Please verify provider get-all endpoint payload and mapping.',
@@ -116,6 +189,7 @@ class VirtualCardService
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
                 $cardColor = (string) ($data['card_color'] ?? 'green');
+                $programBilling = $this->pagocardsProgramBillingColumns();
 
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
@@ -150,11 +224,7 @@ class VirtualCardService
                         'balance' => $this->extractBalance($response),
                         'is_active' => true,
                         'is_frozen' => false,
-                        'billing_address_street' => $data['billing_address_street'] ?? null,
-                        'billing_address_city' => $data['billing_address_city'] ?? null,
-                        'billing_address_state' => $data['billing_address_state'] ?? null,
-                        'billing_address_country' => $data['billing_address_country'] ?? null,
-                        'billing_address_postal_code' => $data['billing_address_postal_code'] ?? null,
+                        ...$programBilling,
                         'metadata' => [
                             'source' => 'provider',
                             'provider_account_email' => (string) $accountEmail,
@@ -190,6 +260,20 @@ class VirtualCardService
                     ],
                 ]);
 
+                ApplicationLog::info('virtual_card', 'virtual_card.create.completed', [
+                    'user_id' => $userId,
+                    'virtual_card_id' => $card->id,
+                    'provider_card_id' => $providerCardId,
+                    'provider_status' => $card->provider_status,
+                    'card_balance_usd' => (float) $card->balance,
+                    'payment_wallet_type' => $paymentWalletType,
+                    'fee_charged_amount' => $txFeeAmount,
+                    'fee_charged_currency' => $txCurrency,
+                    'ledger_transaction_id' => $transaction->transaction_id,
+                    'provider_message' => $response['message'] ?? null,
+                    'provider_response' => $this->sanitizeProviderPayloadForLog($response),
+                ]);
+
                 return [
                     'success' => true,
                     'message' => $response['message'] ?? 'Virtual card created successfully',
@@ -206,12 +290,55 @@ class VirtualCardService
                 ];
             });
         } catch (\RuntimeException $e) {
+            ApplicationLog::warning('virtual_card', 'virtual_card.create.fee_or_persist_failed', [
+                'user_id' => $userId,
+                'provider_card_id' => $resolvedProviderCardId ?? null,
+                'message' => $e->getMessage(),
+            ]);
+
             return [
                 'success' => false,
                 'message' => $e->getMessage(),
                 'status' => 400,
             ];
         }
+    }
+
+    /**
+     * Strip PCI-sensitive fields before writing provider JSON to {@see ApplicationLog}.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function sanitizeProviderPayloadForLog(array $payload): array
+    {
+        $redactExact = [
+            'pan', 'card_number', 'cardnumber', 'cvv', 'cvv2', 'cvc', 'cvc2',
+            'secretkey', 'secret_key', 'privatekey', 'private_key', 'password', 'accesstoken',
+        ];
+
+        $walker = function (mixed $node) use (&$walker, $redactExact): mixed {
+            if (! is_array($node)) {
+                return $node;
+            }
+            $out = [];
+            foreach ($node as $key => $value) {
+                $lk = strtolower((string) $key);
+                if (in_array($lk, $redactExact, true)
+                    || str_contains($lk, 'cvv')
+                    || str_contains($lk, 'cvc')
+                    || str_ends_with($lk, 'pan')) {
+                    $out[$key] = '***';
+
+                    continue;
+                }
+                $out[$key] = is_array($value) ? $walker($value) : $value;
+            }
+
+            return $out;
+        };
+
+        return $walker($payload);
     }
 
     /**
@@ -405,6 +532,9 @@ class VirtualCardService
         $card = VirtualCard::where('id', $cardId)
             ->where('user_id', $userId)
             ->firstOrFail();
+
+        $this->ensurePagocardsBillingPersisted($card);
+        $card->refresh();
 
         if (! $card->provider_card_id) {
             return [
