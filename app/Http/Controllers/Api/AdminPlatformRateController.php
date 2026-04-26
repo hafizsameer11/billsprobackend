@@ -50,9 +50,11 @@ class AdminPlatformRateController extends Controller
             ->all();
 
         $virtualServices = [
-            ['key' => 'creation', 'label' => 'Card creation'],
-            ['key' => 'fund', 'label' => 'Deposit / fund card'],
+            ['key' => 'creation', 'label' => 'Mastercard — card creation'],
+            ['key' => 'fund', 'label' => 'Mastercard — deposit / fund card'],
             ['key' => 'withdraw', 'label' => 'Withdraw from card'],
+            ['key' => 'visa_creation', 'label' => 'Visa — card creation'],
+            ['key' => 'visa_fund', 'label' => 'Visa — deposit / fund card'],
         ];
 
         return ResponseHelper::success([

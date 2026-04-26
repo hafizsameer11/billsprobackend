@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\PushTokenController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\VirtualCardController;
+use App\Http\Controllers\Api\VisaVirtualCardController;
 use App\Http\Controllers\Api\WalletController;
 use App\Http\Controllers\Api\WithdrawalController;
 use Illuminate\Http\Request;
@@ -367,7 +368,22 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     });
 
     // ========================================================================
-    // VIRTUAL CARD ROUTES
+    // VIRTUAL CARD ROUTES (Visa — register before `virtual-cards/{id}` so `visa-card` is not captured as id)
+    // ========================================================================
+    Route::prefix('virtual-cards/visa-card')->group(function () {
+        Route::get('/creation-fee', [VisaVirtualCardController::class, 'creationFee']);
+        Route::get('/funding-estimate', [VisaVirtualCardController::class, 'fundingEstimate']);
+        Route::get('/', [VisaVirtualCardController::class, 'index']);
+        Route::post('/', [VisaVirtualCardController::class, 'create']);
+        Route::get('/{id}', [VisaVirtualCardController::class, 'show'])->whereNumber('id');
+        Route::post('/{id}/fund', [VisaVirtualCardController::class, 'fund'])->whereNumber('id');
+        Route::get('/{id}/transactions', [VisaVirtualCardController::class, 'transactions'])->whereNumber('id');
+        Route::post('/{id}/freeze', [VisaVirtualCardController::class, 'freeze'])->whereNumber('id');
+        Route::post('/{id}/unfreeze', [VisaVirtualCardController::class, 'unfreeze'])->whereNumber('id');
+    });
+
+    // ========================================================================
+    // VIRTUAL CARD ROUTES (Mastercard / shared list)
     // ========================================================================
     Route::prefix('virtual-cards')->group(function () {
         Route::get('/pending-provider-events', [VirtualCardController::class, 'pendingProviderEvents']);

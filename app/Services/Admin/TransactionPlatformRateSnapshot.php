@@ -29,6 +29,8 @@ class TransactionPlatformRateSnapshot
         $cur = strtoupper((string) ($t->currency ?? ''));
         $net = isset($meta['network']) ? (string) $meta['network'] : (isset($meta['blockchain']) ? (string) $meta['blockchain'] : null);
 
+        $cardScheme = isset($meta['card_scheme']) ? strtolower((string) $meta['card_scheme']) : '';
+
         return match ($type) {
             'bill_payment' => $this->resolver->findFiat('bill_payment', $t->category ?: null)
                 ?? $this->resolver->findFiat('bill_payment', null),
@@ -38,8 +40,12 @@ class TransactionPlatformRateSnapshot
             'crypto_sell' => $this->resolver->findCrypto('sell', $cur ?: null, $net),
             'crypto_deposit' => $this->resolver->findCrypto('deposit', $cur ?: null, $net),
             'crypto_withdrawal', 'external_send' => $this->resolver->findCryptoSendOrWithdrawal($cur ?: null, $net),
-            'card_creation' => $this->resolver->findVirtualCard('creation'),
-            'card_funding' => $this->resolver->findVirtualCard('fund'),
+            'card_creation' => $cardScheme === 'visa'
+                ? $this->resolver->findVirtualCard('visa_creation')
+                : $this->resolver->findVirtualCard('creation'),
+            'card_funding' => $cardScheme === 'visa'
+                ? $this->resolver->findVirtualCard('visa_fund')
+                : $this->resolver->findVirtualCard('fund'),
             default => null,
         };
     }

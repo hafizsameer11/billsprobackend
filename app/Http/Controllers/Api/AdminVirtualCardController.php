@@ -257,6 +257,8 @@ class AdminVirtualCardController extends Controller
         $lastFour = $card->card_number ? substr((string) $card->card_number, -4) : '0000';
         $balance = (float) $card->balance;
 
+        $scheme = strtolower((string) $card->card_type) === 'visa' ? 'visa' : 'mastercard';
+
         return [
             'id' => $card->id,
             'user_id' => $card->user_id,
@@ -269,6 +271,7 @@ class AdminVirtualCardController extends Controller
             'is_frozen' => (bool) $card->is_frozen,
             'is_active' => (bool) $card->is_active,
             'card_color' => $color,
+            'card_scheme' => $scheme,
         ];
     }
 

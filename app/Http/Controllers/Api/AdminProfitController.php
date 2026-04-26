@@ -127,6 +127,9 @@ class AdminProfitController extends Controller
                 'profit' => $profit,
                 'revenue' => $revenue,
                 'rate_from_admin' => $this->rateSnapshot->forTransaction($t),
+                'virtual_card_scheme' => in_array($t->type, ['card_creation', 'card_funding'], true) && is_array($t->metadata)
+                    ? (isset($t->metadata['card_scheme']) ? (string) $t->metadata['card_scheme'] : null)
+                    : null,
             ];
         });
 

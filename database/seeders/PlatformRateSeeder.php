@@ -156,6 +156,30 @@ class PlatformRateSeeder extends Seeder
                 'min_fee_ngn' => null,
                 'fee_usd' => null,
             ],
+            [
+                'category' => 'virtual_card',
+                'service_key' => 'visa_creation',
+                'sub_service_key' => null,
+                'crypto_asset' => null,
+                'network_key' => null,
+                'exchange_rate_ngn_per_usd' => $usdToNgn,
+                'fixed_fee_ngn' => 0,
+                'percentage_fee' => null,
+                'min_fee_ngn' => null,
+                'fee_usd' => 6.0,
+            ],
+            [
+                'category' => 'virtual_card',
+                'service_key' => 'visa_fund',
+                'sub_service_key' => null,
+                'crypto_asset' => null,
+                'network_key' => null,
+                'exchange_rate_ngn_per_usd' => $usdToNgn,
+                'fixed_fee_ngn' => 0,
+                'percentage_fee' => $fundPct,
+                'min_fee_ngn' => null,
+                'fee_usd' => $fundFlatUsd,
+            ],
         ];
 
         foreach (BillPaymentCategory::query()->where('is_active', true)->orderBy('code')->cursor() as $cat) {

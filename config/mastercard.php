@@ -5,6 +5,7 @@
  *
  * Official routes (POST, JSON body, headers `publickey` + `secretkey`):
  *   /mastercard/createcard | fundcard | getcarddetails | getallcards
+ *   /visacard/createcard | fundcard | getcarddetails | getallcards | blockcard | unblockcard (same Pagocards keys + base URL)
  *   /mastercard/blockdigital | unblockdigital
  *   /mastercard/check3ds | approve3ds | checkwallet
  *   /mastercard/spendcontrol | deletespendcontrol
@@ -44,5 +45,13 @@ return [
         'merchant_master_approve_3ds' => env('MASTERCARD_API_APPROVE_3DS_PATH') ?: '/mastercard/approve3ds',
         'merchant_master_spend_control' => env('MASTERCARD_API_SPEND_CONTROL_PATH') ?: '/mastercard/spendcontrol',
         'merchant_master_delete_spend_control' => env('MASTERCARD_API_DELETE_SPEND_CONTROL_PATH') ?: '/mastercard/deletespendcontrol',
+
+        /** Pagocards Visa — same `publickey` / `secretkey` / `merchant_base_url` as Mastercard. */
+        'visa_create' => env('MASTERCARD_API_VISA_CREATE_PATH') ?: '/visacard/createcard',
+        'visa_get_all' => env('MASTERCARD_API_VISA_GET_ALL_PATH') ?: '/visacard/getallcards',
+        'visa_get_card' => env('MASTERCARD_API_VISA_GET_CARD_PATH') ?: '/visacard/getcarddetails',
+        'visa_fund' => env('MASTERCARD_API_VISA_FUND_PATH') ?: '/visacard/fundcard',
+        'visa_block' => env('MASTERCARD_API_VISA_BLOCK_PATH') ?: '/visacard/blockcard',
+        'visa_unblock' => env('MASTERCARD_API_VISA_UNBLOCK_PATH') ?: '/visacard/unblockcard',
     ],
 ];
