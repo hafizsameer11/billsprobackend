@@ -361,6 +361,16 @@ class VirtualCardService
             }
         }
 
+        $accountEmail = trim($accountEmail);
+        if ($accountEmail === '' || ! filter_var($accountEmail, FILTER_VALIDATE_EMAIL)) {
+            return [
+                'success' => false,
+                'message' => 'A valid email is required for the card provider. Update your profile email or pass email/useremail in the request.',
+                'status' => 422,
+            ];
+        }
+
+        /** Pagocards `POST /visacard/createcard` — JSON body: firstname, lastname, email only (same as their docs). */
         $payload = [
             'firstname' => $firstname,
             'lastname' => $lastname,
@@ -1633,14 +1643,14 @@ class VirtualCardService
         int $cardId,
         callable $apiAction,
         string $actionKey = 'provider_card_action'
-    ): array
-    {
+    ): array {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
         if (! $card->provider_card_id) {
             ApplicationLog::warning('virtual_card', "virtual_card.{$actionKey}.missing_provider_metadata", [
                 'user_id' => $userId,
                 'card_id' => $cardId,
             ]);
+
             return ['success' => false, 'message' => 'This card is missing provider metadata.'];
         }
 
@@ -1670,6 +1680,7 @@ class VirtualCardService
                 'payload' => $payload,
                 'error' => $exception->getMessage(),
             ]);
+
             return ['success' => false, 'message' => $exception->getMessage()];
         }
 

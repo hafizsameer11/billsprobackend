@@ -5,7 +5,8 @@
  *
  * Official routes (POST, JSON body, headers `publickey` + `secretkey`):
  *   /mastercard/createcard | fundcard | getcarddetails | getallcards
- *   /visacard/createcard | fundcard | getcarddetails | getallcards | blockcard | unblockcard (same Pagocards keys + base URL)
+ *   /visacard/createcard | fundcard | getcarddetails | getallcards | blockcard | unblockcard (same Pagocards keys + base URL).
+ *   Visa createcard body per Pagocards: JSON `firstname`, `lastname`, `email` (+ headers publickey, secretkey).
  *   /mastercard/blockdigital | unblockdigital
  *   /mastercard/check3ds | approve3ds | checkwallet
  *   /mastercard/spendcontrol | deletespendcontrol
