@@ -377,6 +377,12 @@ class VirtualCardService
             'email' => $accountEmail,
         ];
 
+        ApplicationLog::info('virtual_card', 'virtual_card.create_visa.provider_request', [
+            'user_id' => $userId,
+            'endpoint' => 'visa_create',
+            'pagocards_body' => $payload,
+        ]);
+
         try {
             $response = $this->visaCardApiClient->createCard($payload);
         } catch (MastercardApiException $exception) {
