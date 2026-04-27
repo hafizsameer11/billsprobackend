@@ -33,7 +33,20 @@ class VisaCardApiClient
      */
     public function getCardDetails(array $payload): array
     {
-        return $this->request('visa_get_card', $payload);
+        $data = $this->request('visa_get_card', $payload);
+        $normalized = $this->normalizeVisaGetCardResponse($data);
+        if (array_key_exists('success', $normalized) && $normalized['success'] === false) {
+            throw new MastercardApiException(
+                $this->normalizeMessage($normalized['message'] ?? null),
+                422,
+                [
+                    'endpoint_key' => 'visa_get_card',
+                    'response' => $data,
+                ]
+            );
+        }
+
+        return $normalized;
     }
 
     /**
@@ -127,9 +140,71 @@ class VisaCardApiClient
             );
         }
 
-        $data['message'] = $this->normalizeMessage($data['message'] ?? null);
+        // Visa getcard returns `{ "secure": { "success", "message", "data": { "details", "transactions" } } }`
+        // without a top-level `message`; avoid turning that into a bogus "request failed" string.
+        if ($endpointKey !== 'visa_get_card') {
+            $data['message'] = $this->normalizeMessage($data['message'] ?? null);
+        }
 
         return $data;
+    }
+
+    /**
+     * Flatten Pagocards Visa getcard JSON into the same `data.*` shape {@see VirtualCardService} expects
+     * (aligned with Mastercard getcarddetails-style consumers).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected function normalizeVisaGetCardResponse(array $data): array
+    {
+        $secure = $data['secure'] ?? null;
+        if (! is_array($secure)) {
+            return $data;
+        }
+
+        $inner = $secure['data'] ?? null;
+        if (! is_array($inner)) {
+            $msg = $secure['message'] ?? null;
+
+            return [
+                'success' => (bool) ($secure['success'] ?? true),
+                'message' => is_string($msg) && $msg !== ''
+                    ? $msg
+                    : 'Card details retrieved successfully.',
+                'data' => [],
+            ];
+        }
+
+        $details = $inner['details'] ?? [];
+        $details = is_array($details) ? $details : [];
+
+        $transactions = $inner['transactions'] ?? [];
+        $transactions = is_array($transactions) ? array_values($transactions) : [];
+
+        $balanceUsd = null;
+        $rawBal = $details['balance_amount'] ?? null;
+        if (is_numeric($rawBal)) {
+            // Pagocards sample: balance_amount "3000000" ↔ display_amount 3 (USD)
+            $balanceUsd = (float) $rawBal / 1_000_000.0;
+        }
+
+        $flat = array_merge($details, [
+            'transactions' => $transactions,
+        ]);
+        if ($balanceUsd !== null) {
+            $flat['balance'] = $balanceUsd;
+        }
+
+        $msg = $secure['message'] ?? null;
+
+        return [
+            'success' => (bool) ($secure['success'] ?? true),
+            'message' => is_string($msg) && $msg !== ''
+                ? $msg
+                : 'Card details retrieved successfully.',
+            'data' => $flat,
+        ];
     }
 
     protected function normalizeMessage(mixed $rawMessage): string
