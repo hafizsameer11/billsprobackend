@@ -12,6 +12,9 @@ use Illuminate\Support\Str;
  */
 class VisaCardApiClient
 {
+    /** Pagocards Visa amounts (balance, tx amounts, merchant amounts) are scaled: 1 USD = 1e6 integer units. */
+    private const VISA_USD_MICRO_UNIT = 1_000_000.0;
+
     /**
      * @throws MastercardApiException
      */
@@ -181,12 +184,15 @@ class VisaCardApiClient
 
         $transactions = $inner['transactions'] ?? [];
         $transactions = is_array($transactions) ? array_values($transactions) : [];
+        $transactions = array_map(function ($row) {
+            return is_array($row) ? $this->scaleVisaTransactionRowFromMicroUsd($row) : $row;
+        }, $transactions);
 
         $balanceUsd = null;
         $rawBal = $details['balance_amount'] ?? null;
         if (is_numeric($rawBal)) {
-            // Pagocards sample: balance_amount "3000000" ↔ display_amount 3 (USD)
-            $balanceUsd = (float) $rawBal / 1_000_000.0;
+            // Pagocards Visa: balance_amount is micro-USD (1e6 per $1), same as transaction amounts.
+            $balanceUsd = (float) $rawBal / self::VISA_USD_MICRO_UNIT;
         }
 
         $flat = array_merge($details, [
@@ -205,6 +211,77 @@ class VisaCardApiClient
                 : 'Card details retrieved successfully.',
             'data' => $flat,
         ];
+    }
+
+    /**
+     * Convert one Visa getcard transaction row from Pagocards micro-USD to decimal USD for DB / {@see VirtualCardService::normalizeProviderTransaction}.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    protected function scaleVisaTransactionRowFromMicroUsd(array $row): array
+    {
+        $moneyKeys = [
+            'amount', 'transaction_amount', 'value', 'debit_amount', 'debitAmount',
+            'merchantAmount', 'merchant_amount', 'total_amount', 'total', 'fee', 'transaction_fee',
+            'fee_amount', 'feeAmount',
+            'authorized_amount', 'authorizedAmount', 'authorization_amount', 'authorizationAmount',
+            'billing_amount', 'billingAmount',
+            'settlement_amount', 'settlementAmount',
+            // Same scale as other Visa money integers when provider sends micro-USD; small values left as-is by scaler.
+            'display_amount', 'displayAmount',
+        ];
+        $out = $row;
+        foreach ($moneyKeys as $key) {
+            if (! array_key_exists($key, $out)) {
+                continue;
+            }
+            $out[$key] = $this->scaleVisaMicroUsdScalar($out[$key]);
+        }
+        if (isset($out['merchant']) && is_array($out['merchant'])) {
+            $m = $out['merchant'];
+            foreach (['amount', 'transactionAmount', 'authorizedAmount'] as $mk) {
+                if (array_key_exists($mk, $m)) {
+                    $m[$mk] = $this->scaleVisaMicroUsdScalar($m[$mk]);
+                }
+            }
+            $out['merchant'] = $m;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return mixed  float|list<mixed>|mixed unchanged non-numeric
+     */
+    protected function scaleVisaMicroUsdScalar(mixed $raw): mixed
+    {
+        if ($raw === null || $raw === '') {
+            return $raw;
+        }
+        if (is_array($raw)) {
+            return array_map(fn ($v) => $this->scaleVisaMicroUsdScalar($v), $raw);
+        }
+        if (! is_numeric($raw)) {
+            return $raw;
+        }
+        $n = (float) $raw;
+        if (! is_finite($n) || $n === 0.0) {
+            return $n;
+        }
+        $asString = (string) $raw;
+        // Already decimal USD from provider (e.g. "9.00", "1.5") — do not scale.
+        if (str_contains($asString, '.') || str_contains(strtolower($asString), 'e')) {
+            if (abs($n) < 1000.0) {
+                return $n;
+            }
+        }
+        // Small integers are treated as whole dollars (legacy / edge); large magnitudes are micro-USD.
+        if (abs($n) < 1000.0) {
+            return $n;
+        }
+
+        return $n / self::VISA_USD_MICRO_UNIT;
     }
 
     protected function normalizeMessage(mixed $rawMessage): string

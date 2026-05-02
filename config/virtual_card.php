@@ -1,5 +1,28 @@
 <?php
 
+$programBillingMastercard = [
+    'billing_address_street' => (string) env(
+        'VIRTUAL_CARD_PROGRAM_BILLING_MC_STREET',
+        env('VIRTUAL_CARD_PROGRAM_BILLING_STREET', '128 City Road')
+    ),
+    'billing_address_city' => (string) env(
+        'VIRTUAL_CARD_PROGRAM_BILLING_MC_CITY',
+        env('VIRTUAL_CARD_PROGRAM_BILLING_CITY', 'London')
+    ),
+    'billing_address_state' => (string) env(
+        'VIRTUAL_CARD_PROGRAM_BILLING_MC_STATE',
+        env('VIRTUAL_CARD_PROGRAM_BILLING_STATE', 'London')
+    ),
+    'billing_address_country' => (string) env(
+        'VIRTUAL_CARD_PROGRAM_BILLING_MC_COUNTRY',
+        env('VIRTUAL_CARD_PROGRAM_BILLING_COUNTRY', 'United Kingdom (GB)')
+    ),
+    'billing_address_postal_code' => (string) env(
+        'VIRTUAL_CARD_PROGRAM_BILLING_MC_POSTAL',
+        env('VIRTUAL_CARD_PROGRAM_BILLING_POSTAL', 'EC1V 2NX')
+    ),
+];
+
 return [
     /*
     | Card creation fee (USD) — fallback when admin platform rate has no `fee_usd`.
@@ -27,14 +50,16 @@ return [
     'fund_load_percent' => (float) env('VIRTUAL_CARD_FUND_LOAD_PERCENT', 1.0),
 
     /*
-    | Pagocards program billing — same for every card (issuer requirement).
-    | Override via env if the program address changes.
+    | Pagocards program billing — scheme-specific (Visa vs Mastercard).
+    | `program_billing` mirrors Mastercard for backward compatibility (legacy env keys).
     */
-    'program_billing' => [
-        'billing_address_street' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_STREET', '128 city road'),
-        'billing_address_city' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_CITY', 'london'),
-        'billing_address_state' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_STATE', 'london'),
-        'billing_address_country' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_COUNTRY', 'GB'),
-        'billing_address_postal_code' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_POSTAL', 'ec1v2nx'),
+    'program_billing' => $programBillingMastercard,
+    'program_billing_mastercard' => $programBillingMastercard,
+    'program_billing_visa' => [
+        'billing_address_street' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_VISA_STREET', '3401 N. Miami Ave., Ste. 230'),
+        'billing_address_city' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_VISA_CITY', 'Miami'),
+        'billing_address_state' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_VISA_STATE', 'Florida'),
+        'billing_address_country' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_VISA_COUNTRY', 'United States'),
+        'billing_address_postal_code' => (string) env('VIRTUAL_CARD_PROGRAM_BILLING_VISA_POSTAL', '33127'),
     ],
 ];

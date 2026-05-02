@@ -31,7 +31,7 @@ class VirtualCardService
     ) {}
 
     /**
-     * Pagocards-supported billing columns (same for all cards).
+     * Pagocards-supported billing columns; program defaults depend on card scheme (Visa vs Mastercard).
      *
      * @return array{
      *     billing_address_street: string,
@@ -41,35 +41,57 @@ class VirtualCardService
      *     billing_address_postal_code: string
      * }
      */
-    public function pagocardsProgramBillingColumns(): array
+    public function pagocardsProgramBillingColumns(?string $cardType = null): array
     {
-        $b = config('virtual_card.program_billing', []);
+        $type = strtolower((string) $cardType);
+        $configKey = $type === 'visa' ? 'program_billing_visa' : 'program_billing_mastercard';
+        $b = config("virtual_card.{$configKey}", []);
+
+        $defaults = $type === 'visa'
+            ? [
+                'billing_address_street' => '3401 N. Miami Ave., Ste. 230',
+                'billing_address_city' => 'Miami',
+                'billing_address_state' => 'Florida',
+                'billing_address_country' => 'United States',
+                'billing_address_postal_code' => '33127',
+            ]
+            : [
+                'billing_address_street' => '128 City Road',
+                'billing_address_city' => 'London',
+                'billing_address_state' => 'London',
+                'billing_address_country' => 'United Kingdom (GB)',
+                'billing_address_postal_code' => 'EC1V 2NX',
+            ];
 
         return [
-            'billing_address_street' => (string) ($b['billing_address_street'] ?? '128 city road'),
-            'billing_address_city' => (string) ($b['billing_address_city'] ?? 'london'),
-            'billing_address_state' => (string) ($b['billing_address_state'] ?? 'london'),
-            'billing_address_country' => (string) ($b['billing_address_country'] ?? 'GB'),
-            'billing_address_postal_code' => (string) ($b['billing_address_postal_code'] ?? 'ec1v2nx'),
+            'billing_address_street' => (string) ($b['billing_address_street'] ?? $defaults['billing_address_street']),
+            'billing_address_city' => (string) ($b['billing_address_city'] ?? $defaults['billing_address_city']),
+            'billing_address_state' => (string) ($b['billing_address_state'] ?? $defaults['billing_address_state']),
+            'billing_address_country' => (string) ($b['billing_address_country'] ?? $defaults['billing_address_country']),
+            'billing_address_postal_code' => (string) ($b['billing_address_postal_code'] ?? $defaults['billing_address_postal_code']),
         ];
     }
 
     /**
-     * Shape returned by GET /virtual-cards/{id}/billing-address (always program address).
+     * Shape returned by GET /virtual-cards/{id}/billing-address (program address for that card’s scheme).
      *
-     * @return array{street: string, city: string, state: string, country: string, postal_code: string}
+     * @return array{street: string, city: string, state: string, country: string, postal_code: string, full_address?: string}
      */
-    public function programBillingAddressForApp(): array
+    public function programBillingAddressForApp(VirtualCard $card): array
     {
-        $b = $this->pagocardsProgramBillingColumns();
-
-        return [
+        $b = $this->pagocardsProgramBillingColumns($card->card_type);
+        $out = [
             'street' => $b['billing_address_street'],
             'city' => $b['billing_address_city'],
             'state' => $b['billing_address_state'],
             'country' => $b['billing_address_country'],
             'postal_code' => $b['billing_address_postal_code'],
         ];
+        if (strtolower((string) $card->card_type) !== 'visa') {
+            $out['full_address'] = $b['billing_address_street'].', '.$b['billing_address_city'].', '.$b['billing_address_postal_code'];
+        }
+
+        return $out;
     }
 
     /**
@@ -77,7 +99,7 @@ class VirtualCardService
      */
     public function ensurePagocardsBillingPersisted(VirtualCard $card): void
     {
-        $p = $this->pagocardsProgramBillingColumns();
+        $p = $this->pagocardsProgramBillingColumns($card->card_type);
         $empty = static fn (?string $v): bool => trim((string) ($v ?? '')) === '';
         if (
             $empty($card->billing_address_street)
@@ -194,7 +216,7 @@ class VirtualCardService
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
                 $cardColor = (string) ($data['card_color'] ?? 'green');
-                $programBilling = $this->pagocardsProgramBillingColumns();
+                $programBilling = $this->pagocardsProgramBillingColumns('mastercard');
 
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
@@ -429,7 +451,7 @@ class VirtualCardService
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
                 $cardColor = (string) ($data['card_color'] ?? 'green');
-                $programBilling = $this->pagocardsProgramBillingColumns();
+                $programBilling = $this->pagocardsProgramBillingColumns('visa');
 
                 if ($paymentWalletType === 'naira_wallet') {
                     $wallet = FiatWallet::where('user_id', $userId)
@@ -2173,21 +2195,6 @@ class VirtualCardService
             $providerTxId = 'provider_'.md5(json_encode($providerTransaction) ?: uniqid('tx', true));
         }
 
-        $amount = $this->parseMoney(
-            $providerTransaction['amount']
-            ?? $providerTransaction['transaction_amount']
-            ?? $providerTransaction['value']
-            ?? $providerTransaction['debit_amount']
-            ?? $providerTransaction['debitAmount']
-            ?? 0
-        );
-        $fee = $this->parseMoney($providerTransaction['fee'] ?? $providerTransaction['transaction_fee'] ?? 0);
-        $total = $this->parseMoney(
-            $providerTransaction['total_amount']
-            ?? $providerTransaction['total']
-            ?? ($amount + $fee)
-        );
-
         $merchant = is_array($providerTransaction['merchant'] ?? null) ? $providerTransaction['merchant'] : [];
         $merchantName = trim((string) ($merchant['name'] ?? ''));
         $merchantCity = trim((string) ($merchant['city'] ?? ''));
@@ -2196,6 +2203,42 @@ class VirtualCardService
         $merchantMid = trim((string) ($merchant['mid'] ?? ''));
 
         $merchantAmountRaw = $providerTransaction['merchantAmount'] ?? $providerTransaction['merchant_amount'] ?? null;
+        $merchantParsed = ($merchantAmountRaw !== null && $merchantAmountRaw !== '')
+            ? $this->parseMoney($merchantAmountRaw)
+            : null;
+
+        // Prefer human-facing / auth amounts first (Pagocards Visa often aligns these with the dashboard; raw `amount` may be 0 on verification rows).
+        // `value` is last resort — often balance or unrelated and previously caused bogus totals.
+        $amount = $this->parseMoney(
+            $providerTransaction['display_amount']
+            ?? $providerTransaction['displayAmount']
+            ?? $providerTransaction['authorization_amount']
+            ?? $providerTransaction['authorizationAmount']
+            ?? $providerTransaction['transaction_amount']
+            ?? $providerTransaction['amount']
+            ?? $providerTransaction['debit_amount']
+            ?? $providerTransaction['debitAmount']
+            ?? 0
+        );
+        if ($amount === 0.0) {
+            $amount = $this->parseMoney($providerTransaction['value'] ?? 0);
+        }
+        if ($merchantParsed !== null && $merchantParsed > 0.0 && ($amount === 0.0 || $amount > $merchantParsed * 50.0)) {
+            $amount = $merchantParsed;
+        }
+
+        $fee = $this->parseMoney(
+            $providerTransaction['fee_amount']
+            ?? $providerTransaction['feeAmount']
+            ?? $providerTransaction['fee']
+            ?? $providerTransaction['transaction_fee']
+            ?? 0
+        );
+        $total = $this->parseMoney(
+            $providerTransaction['total_amount']
+            ?? $providerTransaction['total']
+            ?? ($amount + $fee)
+        );
         $merchantCurrency = (string) ($providerTransaction['merchantCurrency'] ?? $providerTransaction['merchant_currency'] ?? '');
         $paymentAt = $providerTransaction['paymentDateTime']
             ?? $providerTransaction['payment_datetime']

@@ -22,7 +22,9 @@ use App\Http\Controllers\Api\AdminWalletCurrencyController;
 use App\Http\Controllers\Api\AdminWalletUsersController;
 use App\Http\Controllers\Api\AdminWebhookController;
 use App\Http\Controllers\Api\AdminWithdrawalController;
+use App\Http\Controllers\Api\AdminLegalDocumentController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\LegalDocumentController;
 use App\Http\Controllers\Api\BillPaymentController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\CryptoController;
@@ -60,6 +62,9 @@ use Illuminate\Support\Facades\Route;
 // ============================================================================
 // PUBLIC ROUTES - Authentication
 // ============================================================================
+/** In-app legal copy (registration, virtual cards, etc.) — public, no auth */
+Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
+
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
@@ -218,6 +223,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // ========================================================================
     Route::middleware(['admin'])->prefix('admin')->group(function () {
         Route::get('/stats', [AdminStatsController::class, 'index']);
+
+        Route::get('/legal-documents', [AdminLegalDocumentController::class, 'index']);
+        Route::put('/legal-documents/{key}', [AdminLegalDocumentController::class, 'update']);
 
         Route::get('/wallet-users', [AdminWalletUsersController::class, 'index']);
         Route::get('/wallet-users/totals', [AdminWalletUsersController::class, 'totals']);

@@ -402,7 +402,7 @@ class VirtualCardController extends Controller
             }
 
             return ResponseHelper::success(
-                $this->virtualCardService->programBillingAddressForApp(),
+                $this->virtualCardService->programBillingAddressForApp($card),
                 'Billing address retrieved successfully.'
             );
         } catch (\Exception $e) {
