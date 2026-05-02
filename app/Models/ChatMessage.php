@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 
 class ChatMessage extends Model
 {
@@ -32,15 +32,19 @@ class ChatMessage extends Model
     }
 
     /**
-     * Public URL for the stored attachment (mobile clients expect `attachment`).
+     * Time-limited URL for the stored attachment (mobile Image uses plain GET; signed route avoids /storage 403s).
      */
     public function getAttachmentAttribute(): ?string
     {
-        if (! $this->attachment_path) {
+        if (! $this->attachment_path || ! $this->id) {
             return null;
         }
 
-        return Storage::disk('public')->url($this->attachment_path);
+        return URL::temporarySignedRoute(
+            'chat.message.attachment',
+            now()->addDays(30),
+            ['message' => $this->id]
+        );
     }
 
     /**

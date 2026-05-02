@@ -8,7 +8,6 @@ use App\Models\SupportTicket;
 use App\Models\SupportTicketMessage;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class ChatService
 {
@@ -227,7 +226,7 @@ class ChatService
 
         $body = trim((string) $chatMessage->message);
         if ($chatMessage->attachment_path) {
-            $url = Storage::disk('public')->url($chatMessage->attachment_path);
+            $url = $chatMessage->attachment;
             $body = $body !== '' ? $body."\n\n" : '';
             $body .= '[Image] '.$url;
         }

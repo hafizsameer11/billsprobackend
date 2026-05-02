@@ -65,6 +65,11 @@ use Illuminate\Support\Facades\Route;
 /** In-app legal copy (registration, virtual cards, etc.) — public, no auth */
 Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
 
+/** Chat image preview — signed URL only (avoids 403 on /storage when web server blocks direct files) */
+Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadMessageAttachment'])
+    ->middleware('signed')
+    ->name('chat.message.attachment');
+
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
