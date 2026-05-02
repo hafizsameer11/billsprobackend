@@ -35,7 +35,7 @@ COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy nginx configuration
+# Copy nginx configuration (must allow /storage/* — public disk URLs, e.g. chat-attachments)
 COPY docker/nginx/default.conf /etc/nginx/sites-available/default
 RUN ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
@@ -61,7 +61,7 @@ RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-di
 # Expose port 80
 EXPOSE 80
 
-# Set entrypoint
+# Entrypoint runs `php artisan storage:link --force` so public/storage → storage/app/public (uploads).
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Start supervisor

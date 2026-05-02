@@ -34,6 +34,15 @@ chown -R www-data:www-data /var/www/html/bootstrap/cache
 chmod -R 775 /var/www/html/storage
 chmod -R 775 /var/www/html/bootstrap/cache
 
+# Symlink public/storage → storage/app/public (uploads, chat-attachments). --force recreates if bind mount broke link.
+echo "Ensuring storage:link..."
+php artisan storage:link --force || {
+    echo "storage:link failed, creating symlink manually..."
+    rm -rf /var/www/html/public/storage
+    ln -sfn /var/www/html/storage/app/public /var/www/html/public/storage
+}
+chown -h www-data:www-data /var/www/html/public/storage 2>/dev/null || true
+
 # Generate application key if not set
 if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
     echo "Generating application key..."

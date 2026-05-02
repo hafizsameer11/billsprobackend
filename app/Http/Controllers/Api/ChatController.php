@@ -6,7 +6,6 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Chat\StartChatRequest;
 use App\Http\Requests\Chat\SendMessageRequest;
-use App\Models\ChatMessage;
 use App\Services\Chat\ChatService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -21,22 +20,6 @@ class ChatController extends Controller
     public function __construct(ChatService $chatService)
     {
         $this->chatService = $chatService;
-    }
-
-    /**
-     * Download a message attachment (signed URL from ChatMessage::attachment).
-     */
-    public function downloadMessageAttachment(ChatMessage $message)
-    {
-        if (! $message->attachment_path) {
-            abort(404);
-        }
-
-        if (! Storage::disk('public')->exists($message->attachment_path)) {
-            abort(404);
-        }
-
-        return Storage::disk('public')->response($message->attachment_path);
     }
 
     /**
