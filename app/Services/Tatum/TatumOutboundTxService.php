@@ -106,7 +106,7 @@ class TatumOutboundTxService
 
         $decimals = $isNative
             ? 18
-            : $this->erc20DisplayDecimals($chain, $currency);
+            : $this->erc20DisplayDecimals($chain, $this->evmTatumTokenSymbolFromLedgerCurrency($currency));
 
         if (! $isNative && $allowGasTopUp && $sourceAddress) {
             $this->ensureEvmGasTopUp($chain, $sourceAddress);
@@ -126,12 +126,13 @@ class TatumOutboundTxService
                 default => 'ETH',
             };
         } else {
+            $tatumTokenSymbol = $this->evmTatumTokenSymbolFromLedgerCurrency($currency);
             $contracts = config('tatum.contracts.'.$chain, []);
-            $contract = $contracts[$currency] ?? null;
+            $contract = $contracts[$tatumTokenSymbol] ?? null;
             if (! $contract) {
-                throw new RuntimeException("No Tatum contract configured for {$chain}/{$currency}.");
+                throw new RuntimeException("No Tatum contract configured for {$chain}/{$currency} (lookup: {$tatumTokenSymbol}).");
             }
-            $payload['currency'] = $currency;
+            $payload['currency'] = $tatumTokenSymbol;
             $payload['contractAddress'] = $contract;
             $defaultGasLimit = (int) config("tatum.evm_token_fee.{$chain}.gas_limit", 120000);
             if ($defaultGasLimit > 0) {
@@ -530,6 +531,18 @@ class TatumOutboundTxService
         return $this->trimInsignificantFractionZeros(
             number_format($f, $maxDecimals, '.', '')
         );
+    }
+
+    /**
+     * Map `virtual_accounts.currency` (e.g. USDT_BSC, USDC_BSC) to config keys under `tatum.contracts.{chain}`.
+     */
+    protected function evmTatumTokenSymbolFromLedgerCurrency(string $ledgerCurrency): string
+    {
+        return match (strtoupper(trim($ledgerCurrency))) {
+            'USDT_BSC' => 'USDT',
+            'USDC_BSC' => 'USDC',
+            default => strtoupper(trim($ledgerCurrency)),
+        };
     }
 
     protected function erc20DisplayDecimals(string $chain, string $currency): int

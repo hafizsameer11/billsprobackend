@@ -6,8 +6,8 @@ use App\Models\WalletCurrency;
 use Illuminate\Database\Seeder;
 
 /**
- * Launch set only (v1): ETH + USDT (ERC-20), BTC, DOGE, BSC USDT, Tron USDT.
- * Other chains stay out of seed; use migration `*_enforce_launch_wallet_currencies` to deactivate legacy rows.
+ * Active chains: ETH, USDT (ERC-20), USDC (ERC-20), BTC, DOGE, BSC (BNB + USDT + USDC), Tron (TRX + USDT), Solana (SOL).
+ * Tatum V3: GET /v3/{chain}/wallet then address from xpub (EVM/BTC/DOGE/TRON) or single keypair (Solana). See https://docs.tatum.io/docs/address-management
  */
 class WalletCurrencySeeder extends Seeder
 {
@@ -113,6 +113,91 @@ class WalletCurrencySeeder extends Seeder
                 'decimals' => 6,
                 'is_token' => true,
                 'blockchain_name' => 'TRON',
+                'is_active' => true,
+            ],
+            // TRON — native TRX (same chain address as TRC-20; DepositAddressService reuses per-chain address)
+            [
+                'blockchain' => 'tron',
+                'currency' => 'TRX',
+                'symbol' => 'TRX',
+                'name' => 'TRON',
+                'icon' => 'wallet_symbols/trx.png',
+                'price' => null,
+                'naira_price' => null,
+                'rate' => 0.12,
+                'token_type' => null,
+                'contract_address' => null,
+                'decimals' => 6,
+                'is_token' => false,
+                'blockchain_name' => 'TRON',
+                'is_active' => true,
+            ],
+            // Ethereum — USDC (ERC-20)
+            [
+                'blockchain' => 'ethereum',
+                'currency' => 'USDC',
+                'symbol' => 'USDC',
+                'name' => 'USD Coin',
+                'icon' => 'wallet_symbols/usdc.png',
+                'price' => null,
+                'naira_price' => null,
+                'rate' => 1.0,
+                'token_type' => 'ERC-20',
+                'contract_address' => '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+                'decimals' => 6,
+                'is_token' => true,
+                'blockchain_name' => 'Ethereum',
+                'is_active' => true,
+            ],
+            // BSC — USDC (BEP-20); ledger currency USDC_BSC (same pattern as USDT_BSC)
+            [
+                'blockchain' => 'bsc',
+                'currency' => 'USDC_BSC',
+                'symbol' => 'USDC',
+                'name' => 'USD Coin (BSC)',
+                'icon' => 'wallet_symbols/usdc.png',
+                'price' => null,
+                'naira_price' => null,
+                'rate' => 1.0,
+                'token_type' => 'BEP-20',
+                'contract_address' => '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+                'decimals' => 18,
+                'is_token' => true,
+                'blockchain_name' => 'Binance Smart Chain',
+                'is_active' => true,
+            ],
+            // BSC — native BNB
+            [
+                'blockchain' => 'bsc',
+                'currency' => 'BNB',
+                'symbol' => 'BNB',
+                'name' => 'BNB',
+                'icon' => 'wallet_symbols/bnb.png',
+                'price' => null,
+                'naira_price' => null,
+                'rate' => 600.0,
+                'token_type' => null,
+                'contract_address' => null,
+                'decimals' => 18,
+                'is_token' => false,
+                'blockchain_name' => 'Binance Smart Chain',
+                'is_active' => true,
+            ],
+            // Solana — native SOL
+            [
+                'blockchain' => 'solana',
+                'currency' => 'SOL',
+                'symbol' => 'SOL',
+                'name' => 'Solana',
+                'icon' => 'wallet_symbols/sol.png',
+                'price' => null,
+                'naira_price' => null,
+                'rate' => 150.0,
+                'token_type' => null,
+                'contract_address' => null,
+                'decimals' => 9,
+                'is_token' => false,
+                'blockchain_name' => 'Solana',
                 'is_active' => true,
             ],
         ];

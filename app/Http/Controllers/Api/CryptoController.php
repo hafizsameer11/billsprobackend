@@ -49,6 +49,25 @@ class CryptoController extends Controller
     }
 
     /**
+     * Get USDC networks (e.g. Ethereum ERC-20 + BSC BEP-20).
+     */
+    #[OA\Get(path: '/api/crypto/usdc/blockchains', summary: 'Get USDC networks', description: 'Networks where USDC is enabled (matches `wallet_currencies`).', security: [['sanctum' => []]], tags: ['Crypto'])]
+    #[OA\Response(response: 200, description: 'Networks retrieved successfully', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'array', items: new OA\Items(type: 'object'))]))]
+    #[OA\Response(response: 401, description: 'Unauthenticated')]
+    public function getUsdcBlockchains(): JsonResponse
+    {
+        try {
+            $blockchains = $this->cryptoService->getUsdcBlockchains();
+
+            return ResponseHelper::success($blockchains, 'USDC networks retrieved successfully.');
+        } catch (\Exception $e) {
+            Log::error('Get USDC networks error: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
+
+            return ResponseHelper::serverError('An error occurred while retrieving networks. Please try again.');
+        }
+    }
+
+    /**
      * Get virtual accounts (grouped - USDT as one)
      */
     #[OA\Get(path: '/api/crypto/accounts', summary: 'Get virtual accounts', description: 'Get all virtual accounts for the user. USDT accounts are grouped together.', security: [['sanctum' => []]], tags: ['Crypto'])]

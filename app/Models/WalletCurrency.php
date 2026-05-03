@@ -103,16 +103,42 @@ class WalletCurrency extends Model
      */
     public static function findActiveForCrypto(string $currency, ?string $blockchainInput = null): ?self
     {
-        $currency = strtoupper(trim($currency));
-        $q = static::query()->where('currency', $currency)->where('is_active', true);
+        $currencyUpper = strtoupper(trim($currency));
+        $q = static::query()->where('is_active', true);
 
         if ($blockchainInput !== null && trim($blockchainInput) !== '') {
             $b = DepositAddressService::normalizeBlockchain($blockchainInput);
+            $chainLower = strtolower($b);
 
-            return $q->whereRaw('LOWER(blockchain) = ?', [strtolower($b)])->with('exchangeRate')->first();
+            if ($currencyUpper === 'USDT') {
+                $ledger = match ($chainLower) {
+                    'bsc' => 'USDT_BSC',
+                    'tron' => 'USDT_TRON',
+                    default => 'USDT',
+                };
+
+                return $q->where('currency', $ledger)
+                    ->whereRaw('LOWER(blockchain) = ?', [$chainLower])
+                    ->with('exchangeRate')
+                    ->first();
+            }
+
+            if ($currencyUpper === 'USDC') {
+                $ledger = $chainLower === 'bsc' ? 'USDC_BSC' : 'USDC';
+
+                return $q->where('currency', $ledger)
+                    ->whereRaw('LOWER(blockchain) = ?', [$chainLower])
+                    ->with('exchangeRate')
+                    ->first();
+            }
+
+            return $q->where('currency', $currencyUpper)
+                ->whereRaw('LOWER(blockchain) = ?', [$chainLower])
+                ->with('exchangeRate')
+                ->first();
         }
 
-        $rows = $q->with('exchangeRate')->get();
+        $rows = $q->where('currency', $currencyUpper)->with('exchangeRate')->get();
 
         return $rows->count() === 1 ? $rows->first() : null;
     }

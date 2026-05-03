@@ -351,6 +351,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     Route::prefix('crypto')->group(function () {
         // USDT Blockchains
         Route::get('/usdt/blockchains', [CryptoController::class, 'getUsdtBlockchains']);
+        Route::get('/usdc/blockchains', [CryptoController::class, 'getUsdcBlockchains']);
 
         // Virtual Accounts
         Route::get('/accounts', [CryptoController::class, 'getAccounts']);

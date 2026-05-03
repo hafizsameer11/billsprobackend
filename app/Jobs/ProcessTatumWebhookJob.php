@@ -476,6 +476,16 @@ class ProcessTatumWebhookJob implements ShouldQueue
             if ($wc) {
                 return $wc;
             }
+
+            $wc = $this->resolveEthereumUsdcByKnownMainnetContract($chainLower, $contract);
+            if ($wc) {
+                return $wc;
+            }
+
+            $wc = $this->resolveBscUsdcByKnownMainnetContract($chainLower, $contract);
+            if ($wc) {
+                return $wc;
+            }
         }
 
         $symbolHints = array_filter([
@@ -505,12 +515,32 @@ class ProcessTatumWebhookJob implements ShouldQueue
                 if ($tronUsdt) {
                     $wc = WalletCurrency::query()
                         ->whereRaw('LOWER(blockchain) = ?', ['tron'])
-                        ->where('currency', 'USDT')
+                        ->where('currency', 'USDT_TRON')
                         ->whereNotNull('contract_address')
                         ->first();
                     if ($wc) {
                         return $wc;
                     }
+                }
+            }
+            if ($u === 'USDC' && $chainLower === 'ethereum') {
+                $wc = WalletCurrency::query()
+                    ->whereRaw('LOWER(blockchain) = ?', ['ethereum'])
+                    ->where('currency', 'USDC')
+                    ->whereNotNull('contract_address')
+                    ->first();
+                if ($wc) {
+                    return $wc;
+                }
+            }
+            if (($u === 'USDC' || $u === 'USDC_BSC') && $chainLower === 'bsc') {
+                $wc = WalletCurrency::query()
+                    ->whereRaw('LOWER(blockchain) = ?', ['bsc'])
+                    ->where('currency', 'USDC_BSC')
+                    ->whereNotNull('contract_address')
+                    ->first();
+                if ($wc) {
+                    return $wc;
                 }
             }
         }
@@ -540,6 +570,56 @@ class ProcessTatumWebhookJob implements ShouldQueue
         return WalletCurrency::query()
             ->whereRaw('LOWER(blockchain) = ?', ['ethereum'])
             ->where('currency', 'USDT')
+            ->whereNotNull('contract_address')
+            ->first();
+    }
+
+    /**
+     * Fallback: standard Ethereum mainnet USDC contract vs `config('tatum.contracts.ethereum.USDC')`.
+     */
+    protected function resolveEthereumUsdcByKnownMainnetContract(string $chainLower, string $contract): ?WalletCurrency
+    {
+        if (! in_array($chainLower, ['ethereum', 'eth'], true)) {
+            return null;
+        }
+
+        $known = config('tatum.contracts.ethereum.USDC');
+        if (! is_string($known) || $known === '') {
+            return null;
+        }
+
+        if (strcasecmp(trim($contract), trim($known)) !== 0) {
+            return null;
+        }
+
+        return WalletCurrency::query()
+            ->whereRaw('LOWER(blockchain) = ?', ['ethereum'])
+            ->where('currency', 'USDC')
+            ->whereNotNull('contract_address')
+            ->first();
+    }
+
+    /**
+     * Fallback: standard BSC mainnet USDC contract vs `config('tatum.contracts.bsc.USDC')`.
+     */
+    protected function resolveBscUsdcByKnownMainnetContract(string $chainLower, string $contract): ?WalletCurrency
+    {
+        if ($chainLower !== 'bsc') {
+            return null;
+        }
+
+        $known = config('tatum.contracts.bsc.USDC');
+        if (! is_string($known) || $known === '') {
+            return null;
+        }
+
+        if (strcasecmp(trim($contract), trim($known)) !== 0) {
+            return null;
+        }
+
+        return WalletCurrency::query()
+            ->whereRaw('LOWER(blockchain) = ?', ['bsc'])
+            ->where('currency', 'USDC_BSC')
             ->whereNotNull('contract_address')
             ->first();
     }

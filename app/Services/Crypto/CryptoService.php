@@ -154,6 +154,69 @@ class CryptoService
     }
 
     /**
+     * Whether this ledger `currency` is USDC on any chain (ERC-20, BEP-20, …).
+     */
+    protected function isUsdcFamilyLedgerCurrency(?string $currency): bool
+    {
+        if ($currency === null || $currency === '') {
+            return false;
+        }
+
+        $c = strtoupper(trim($currency));
+
+        return $c === 'USDC' || str_starts_with($c, 'USDC_');
+    }
+
+    /**
+     * Get USDC networks (Ethereum + BSC by default; extend query if more USDC_* rows are added).
+     */
+    public function getUsdcBlockchains(): array
+    {
+        $rows = WalletCurrency::query()
+            ->where('is_active', true)
+            ->where(function ($q) {
+                $q->where('currency', 'USDC')
+                    ->orWhere('currency', 'like', 'USDC\_%');
+            })
+            ->orderBy('id')
+            ->get();
+
+        return $rows->map(function (WalletCurrency $currency) {
+            return [
+                'id' => $currency->id,
+                'blockchain' => $currency->blockchain,
+                'blockchain_name' => $currency->blockchain_name,
+                'network' => $currency->blockchain,
+                'currency' => 'USDC',
+                'symbol' => 'USDC',
+                'contract_address' => $currency->contract_address,
+                'decimals' => $currency->decimals,
+                'is_token' => $currency->is_token,
+                'crediting_time' => '1 min',
+            ];
+        })->toArray();
+    }
+
+    /**
+     * Map user-facing USDC + chain to `virtual_accounts.currency` (USDC vs USDC_BSC).
+     */
+    protected function resolveUsdcLedgerCurrency(string $blockchainInput): string
+    {
+        $blockchain = DepositAddressService::normalizeBlockchain($blockchainInput);
+
+        $row = WalletCurrency::query()
+            ->where('is_active', true)
+            ->whereRaw('LOWER(blockchain) = ?', [strtolower($blockchain)])
+            ->where(function ($q) {
+                $q->where('currency', 'USDC')
+                    ->orWhere('currency', 'like', 'USDC\_%');
+            })
+            ->first();
+
+        return $row ? strtoupper((string) $row->currency) : 'USDC';
+    }
+
+    /**
      * Get USDT blockchains
      *
      * ERC-20 uses `currency` = USDT; BSC/TRON use USDT_BSC / USDT_TRON. Do not rely on `symbol` (may be null in DB).
@@ -218,10 +281,13 @@ class CryptoService
 
         $grouped = [];
         $usdtAccounts = [];
+        $usdcAccounts = [];
 
         foreach ($accounts as $account) {
             if ($this->isUsdtFamilyLedgerCurrency($account->currency)) {
                 $usdtAccounts[] = $account;
+            } elseif ($this->isUsdcFamilyLedgerCurrency($account->currency)) {
+                $usdcAccounts[] = $account;
             } else {
                 $grouped[] = $this->formatAccount($account);
             }
@@ -263,6 +329,41 @@ class CryptoService
             ];
         }
 
+        if (! empty($usdcAccounts)) {
+            $totalUsdcBalance = 0;
+            $totalUsdcUsdValue = 0;
+            $usdcBlockchains = [];
+
+            foreach ($usdcAccounts as $account) {
+                $balance = (float) $account->available_balance;
+                $totalUsdcBalance += $balance;
+
+                if ($account->walletCurrency) {
+                    $rate = $account->walletCurrency->usdPerUnitForDisplay();
+                    $totalUsdcUsdValue += $balance * $rate;
+
+                    $usdcBlockchains[] = [
+                        'blockchain' => $account->blockchain,
+                        'blockchain_name' => $account->walletCurrency->blockchain_name ?? $account->blockchain,
+                        'balance' => $balance,
+                        'account_id' => $account->id,
+                    ];
+                }
+            }
+
+            $grouped[] = [
+                'id' => 'usdc_grouped',
+                'currency' => 'USDC',
+                'symbol' => 'USDC',
+                'name' => 'USD Coin',
+                'balance' => $totalUsdcBalance,
+                'usd_value' => $totalUsdcUsdValue,
+                'rate' => $totalUsdcBalance > 0 ? $totalUsdcUsdValue / $totalUsdcBalance : 0,
+                'blockchains' => $usdcBlockchains,
+                'is_grouped' => true,
+            ];
+        }
+
         return $grouped;
     }
 
@@ -275,6 +376,15 @@ class CryptoService
 
         if ($currency === 'USDT' && $blockchain) {
             $ledger = $this->resolveUsdtLedgerCurrency($blockchain);
+            $normB = DepositAddressService::normalizeBlockchain($blockchain);
+            $account = VirtualAccount::where('user_id', $userId)
+                ->where('currency', $ledger)
+                ->whereRaw('LOWER(blockchain) = ?', [strtolower($normB)])
+                ->where('active', true)
+                ->with('walletCurrency.exchangeRate')
+                ->first();
+        } elseif ($currency === 'USDC' && $blockchain) {
+            $ledger = $this->resolveUsdcLedgerCurrency($blockchain);
             $normB = DepositAddressService::normalizeBlockchain($blockchain);
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', $ledger)
@@ -1208,6 +1318,10 @@ class CryptoService
 
         if ($normalizedCurrency === 'USDT') {
             $normalizedCurrency = $this->resolveUsdtLedgerCurrency($normalizedBlockchain);
+        }
+
+        if ($normalizedCurrency === 'USDC') {
+            $normalizedCurrency = $this->resolveUsdcLedgerCurrency($normalizedBlockchain);
         }
 
         return VirtualAccount::where('user_id', $userId)
