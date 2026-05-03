@@ -20,15 +20,17 @@ class CryptoProvisionMissingVirtualAccountsCommand extends Command
     protected $signature = 'crypto:provision-missing-virtual-accounts
                             {--user= : Only this user ID}
                             {--with-tatum-addresses : Call Tatum synchronously for each virtual account (requires TATUM_USE_MOCK=false and API key; long-running)}
-                            {--no-dispatch : Skip queueing ProvisionUserCryptoDepositAddressesJob when not using --with-tatum-addresses}';
+                            {--no-dispatch : Skip queueing ProvisionUserCryptoDepositAddressesJob when not using --with-tatum-addresses}
+                            {--only-new-accounts : Only queue Tatum job for users who received new virtual_accounts this run (default: queue for every user scanned)}';
 
-    protected $description = 'Create missing crypto virtual_accounts from active wallet_currencies; optionally sync Tatum deposit wallets/addresses.';
+    protected $description = 'Create missing virtual_accounts, then queue Tatum user-wallet + deposit address provisioning for all users (or use --only-new-accounts to limit).';
 
     public function handle(CryptoWalletService $cryptoWalletService, DepositAddressService $depositAddressService): int
     {
         $userId = $this->option('user');
         $syncTatum = (bool) $this->option('with-tatum-addresses');
         $noDispatch = (bool) $this->option('no-dispatch');
+        $onlyNewAccounts = (bool) $this->option('only-new-accounts');
 
         if (config('tatum.use_mock') && $syncTatum) {
             $this->error('Refusing --with-tatum-addresses while TATUM_USE_MOCK is true.');
@@ -68,7 +70,7 @@ class CryptoProvisionMissingVirtualAccountsCommand extends Command
                         $this->warn("  virtual_account {$va->id} ({$va->blockchain}/{$va->currency}): {$e->getMessage()}");
                     }
                 }
-            } elseif (! $noDispatch && $nNew > 0) {
+            } elseif (! $noDispatch && (! $onlyNewAccounts || $nNew > 0)) {
                 ProvisionUserCryptoDepositAddressesJob::dispatch($user->id);
                 $jobsDispatched++;
             }
@@ -78,8 +80,9 @@ class CryptoProvisionMissingVirtualAccountsCommand extends Command
 
         $this->info("Done. Users scanned: {$usersProcessed}. New virtual account rows created this run: {$accountsCreated}.");
         if (! $syncTatum && ! $noDispatch) {
-            $this->comment("Queued ProvisionUserCryptoDepositAddressesJob for {$jobsDispatched} user(s) (only where new accounts were added). Run `php artisan queue:work`.");
-            $this->comment('To create Tatum addresses in this process instead of the queue, use --with-tatum-addresses.');
+            $scope = $onlyNewAccounts ? 'users with new virtual_accounts this run' : 'every user scanned';
+            $this->comment("Queued ProvisionUserCryptoDepositAddressesJob for {$jobsDispatched} user(s) ({$scope}). Run `php artisan queue:work`.");
+            $this->comment('Use --only-new-accounts to avoid re-queueing users who had no new ledger rows. Sync in-process: --with-tatum-addresses.');
         }
 
         return self::SUCCESS;

@@ -113,14 +113,14 @@ class AuthService
         // Mark email as verified
         $user->update(['email_verified' => true]);
 
-        // Create wallets in a transaction; then queue Tatum deposit provisioning (after commit).
+        // Create wallets in a transaction; then queue Tatum (per-chain HD wallets + deposit addresses) after commit.
         DB::transaction(function () use ($user) {
             // Create fiat wallet (NGN for Nigeria only)
             if ($user->country_code === 'NG') {
                 $this->walletService->createFiatWallet($user->id, 'NGN', 'NG');
             }
 
-            // Create crypto wallets (virtual accounts — ledger rows)
+            // Ledger rows only — Tatum runs in ProvisionUserCryptoDepositAddressesJob (user_wallets + crypto_deposit_addresses).
             $this->cryptoWalletService->initializeUserCryptoWallets($user->id);
 
             DB::afterCommit(function () use ($user) {
