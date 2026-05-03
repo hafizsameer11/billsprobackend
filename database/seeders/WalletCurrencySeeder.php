@@ -6,7 +6,7 @@ use App\Models\WalletCurrency;
 use Illuminate\Database\Seeder;
 
 /**
- * Active chains: ETH, USDT (ERC-20), USDC (ERC-20), BTC, DOGE, BSC (BNB + USDT + USDC), Tron (TRX + USDT), Solana (SOL).
+ * Active chains: ETH, USDT (ERC-20), USDC (ERC-20), BTC, DOGE, BSC (native `BSC` per Tatum + USDT + USDC), Tron (TRX + USDT), Solana (SOL).
  * Tatum V3: GET /v3/{chain}/wallet then address from xpub (EVM/BTC/DOGE/TRON) or single keypair (Solana). See https://docs.tatum.io/docs/address-management
  */
 class WalletCurrencySeeder extends Seeder
@@ -166,13 +166,13 @@ class WalletCurrencySeeder extends Seeder
                 'blockchain_name' => 'Binance Smart Chain',
                 'is_active' => true,
             ],
-            // BSC — native BNB
+            // BSC — native (Tatum `/v3/bsc/transaction` uses currency `BSC`, not `BNB`; Beacon chain uses `BNB`.)
             [
                 'blockchain' => 'bsc',
-                'currency' => 'BNB',
-                'symbol' => 'BNB',
-                'name' => 'BNB',
-                'icon' => 'wallet_symbols/bnb.png',
+                'currency' => 'BSC',
+                'symbol' => 'BSC',
+                'name' => 'BNB Smart Chain (native)',
+                'icon' => 'wallet_symbols/bsc.png',
                 'price' => null,
                 'naira_price' => null,
                 'rate' => 600.0,

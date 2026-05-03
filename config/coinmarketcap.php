@@ -18,6 +18,8 @@ return [
         'TRX' => 'TRX',
         'USDT_TRON' => 'USDT',
         'BNB' => 'BNB',
+        /** BSC Smart Chain native — priced as BNB on CoinMarketCap */
+        'BSC' => 'BNB',
         'USDT_BSC' => 'USDT',
         'BTC' => 'BTC',
         'SOL' => 'SOL',

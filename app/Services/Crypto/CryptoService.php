@@ -372,28 +372,9 @@ class CryptoService
      */
     public function getAccountDetails(int $userId, string $currency, ?string $blockchain = null): ?array
     {
-        $account = null;
-
-        if ($currency === 'USDT' && $blockchain) {
-            $ledger = $this->resolveUsdtLedgerCurrency($blockchain);
-            $normB = DepositAddressService::normalizeBlockchain($blockchain);
-            $account = VirtualAccount::where('user_id', $userId)
-                ->where('currency', $ledger)
-                ->whereRaw('LOWER(blockchain) = ?', [strtolower($normB)])
-                ->where('active', true)
-                ->with('walletCurrency.exchangeRate')
-                ->first();
-        } elseif ($currency === 'USDC' && $blockchain) {
-            $ledger = $this->resolveUsdcLedgerCurrency($blockchain);
-            $normB = DepositAddressService::normalizeBlockchain($blockchain);
-            $account = VirtualAccount::where('user_id', $userId)
-                ->where('currency', $ledger)
-                ->whereRaw('LOWER(blockchain) = ?', [strtolower($normB)])
-                ->where('active', true)
-                ->with('walletCurrency.exchangeRate')
-                ->first();
+        if ($blockchain) {
+            $account = $this->findActiveVirtualAccount($userId, $currency, $blockchain);
         } else {
-            // For non-USDT or USDT without blockchain, get first matching account
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', $currency)
                 ->where('active', true)
@@ -472,6 +453,9 @@ class CryptoService
             ];
         }
 
+        $resolvedCurrency = strtoupper((string) $account->currency);
+        $resolvedBlockchain = strtolower((string) $account->blockchain);
+
         if (config('tatum.use_mock')) {
             $depositAddress = $this->generateDepositAddress($account);
         } else {
@@ -488,9 +472,9 @@ class CryptoService
         return [
             'success' => true,
             'data' => [
-                'currency' => $normalizedCurrency,
-                'blockchain' => $normalizedBlockchain,
-                'network' => $normalizedBlockchain,
+                'currency' => $resolvedCurrency,
+                'blockchain' => $resolvedBlockchain,
+                'network' => $resolvedBlockchain,
                 'deposit_address' => $depositAddress,
                 'qr_code' => $this->generateQrCode($depositAddress),
                 'account_id' => $account->id,
@@ -1322,6 +1306,16 @@ class CryptoService
 
         if ($normalizedCurrency === 'USDC') {
             $normalizedCurrency = $this->resolveUsdcLedgerCurrency($normalizedBlockchain);
+        }
+
+        if ($normalizedCurrency === 'BNB' && strtolower($normalizedBlockchain) === 'bsc') {
+            $normalizedCurrency = 'BSC';
+        }
+
+        // Legacy clients send blockchain "BNB" (ticker) for BNB Smart Chain; ledger chain is `bsc` (Tatum /v3/bsc).
+        if (in_array($normalizedCurrency, ['BNB', 'BSC'], true) && strtolower($normalizedBlockchain) === 'bnb') {
+            $normalizedBlockchain = 'bsc';
+            $normalizedCurrency = 'BSC';
         }
 
         return VirtualAccount::where('user_id', $userId)

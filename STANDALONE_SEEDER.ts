@@ -73,9 +73,9 @@ const walletCurrencies = [
   // BSC (Binance Smart Chain)
   { 
     blockchain: 'bsc', 
-    currency: 'BNB', 
-    name: 'Binance Coin', 
-    symbol: 'BNB', 
+    currency: 'BSC', 
+    name: 'BNB Smart Chain (native)', 
+    symbol: 'BSC', 
     isToken: false, 
     decimals: 18 
   },

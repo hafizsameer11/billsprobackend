@@ -109,6 +109,9 @@ class WalletCurrency extends Model
         if ($blockchainInput !== null && trim($blockchainInput) !== '') {
             $b = DepositAddressService::normalizeBlockchain($blockchainInput);
             $chainLower = strtolower($b);
+            if (in_array($currencyUpper, ['BNB', 'BSC'], true) && $chainLower === 'bnb') {
+                $chainLower = 'bsc';
+            }
 
             if ($currencyUpper === 'USDT') {
                 $ledger = match ($chainLower) {
@@ -128,6 +131,13 @@ class WalletCurrency extends Model
 
                 return $q->where('currency', $ledger)
                     ->whereRaw('LOWER(blockchain) = ?', [$chainLower])
+                    ->with('exchangeRate')
+                    ->first();
+            }
+
+            if ($currencyUpper === 'BNB' && $chainLower === 'bsc') {
+                return $q->where('currency', 'BSC')
+                    ->whereRaw('LOWER(blockchain) = ?', ['bsc'])
                     ->with('exchangeRate')
                     ->first();
             }
