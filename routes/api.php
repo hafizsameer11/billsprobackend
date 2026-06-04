@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\AdminKycController;
 use App\Http\Controllers\Api\AdminMasterWalletController;
 use App\Http\Controllers\Api\AdminNotificationController;
 use App\Http\Controllers\Api\AdminPlatformRateController;
+use App\Http\Controllers\Api\AdminCommissionController;
 use App\Http\Controllers\Api\AdminProfitController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
@@ -254,9 +255,17 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/transactions', [AdminTransactionController::class, 'index']);
         Route::get('/transactions/{transactionId}', [AdminTransactionController::class, 'show']);
 
+        Route::get('/profit/catalog', [AdminProfitController::class, 'catalog']);
         Route::get('/profit/settings', [AdminProfitController::class, 'settings']);
         Route::put('/profit/settings/{serviceKey}', [AdminProfitController::class, 'updateSetting']);
         Route::get('/profit/transactions', [AdminProfitController::class, 'transactions']);
+
+        Route::get('/commission/tiers', [AdminCommissionController::class, 'tiers']);
+        Route::put('/commission/tiers/{tierKey}', [AdminCommissionController::class, 'updateTier']);
+        Route::get('/commission/rates', [AdminCommissionController::class, 'rates']);
+        Route::post('/commission/rates', [AdminCommissionController::class, 'storeRate']);
+        Route::put('/commission/rates/{id}', [AdminCommissionController::class, 'updateRate']);
+        Route::delete('/commission/rates/{id}', [AdminCommissionController::class, 'destroyRate']);
 
         Route::get('/deposits', [AdminDepositController::class, 'index']);
         Route::get('/deposit-fee-quote', [AdminDepositController::class, 'feeQuote']);
@@ -291,6 +300,8 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/virtual-cards/users-overview', [AdminVirtualCardController::class, 'usersOverview']);
 
         Route::get('/virtual-cards', [AdminVirtualCardController::class, 'index']);
+        Route::get('/virtual-cards/{id}/transactions', [AdminVirtualCardController::class, 'cardTransactions']);
+        Route::get('/virtual-cards/{id}/funding-estimate', [AdminVirtualCardController::class, 'fundingEstimate']);
         Route::get('/virtual-cards/{id}', [AdminVirtualCardController::class, 'show']);
         Route::post('/virtual-cards/{id}/freeze', [AdminVirtualCardController::class, 'freeze']);
         Route::post('/virtual-cards/{id}/unfreeze', [AdminVirtualCardController::class, 'unfreeze']);

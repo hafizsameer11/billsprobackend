@@ -17,6 +17,11 @@ class PlatformRate extends Model
         'percentage_fee',
         'min_fee_ngn',
         'fee_usd',
+        'provider_cost_ngn',
+        'provider_cost_usd',
+        'provider_pct',
+        'provider_pct_cap_ngn',
+        'display_label',
         'is_active',
         'slug',
     ];
@@ -29,6 +34,10 @@ class PlatformRate extends Model
             'percentage_fee' => 'decimal:4',
             'min_fee_ngn' => 'decimal:4',
             'fee_usd' => 'decimal:4',
+            'provider_cost_ngn' => 'decimal:4',
+            'provider_cost_usd' => 'decimal:8',
+            'provider_pct' => 'decimal:4',
+            'provider_pct_cap_ngn' => 'decimal:4',
             'is_active' => 'boolean',
         ];
     }

@@ -9,6 +9,14 @@ use App\Models\PlatformRate;
  */
 class PlatformRateResolver
 {
+    public function __construct(
+        protected PlatformRateMarginEstimator $marginEstimator
+    ) {}
+
+    public function marginEstimator(): PlatformRateMarginEstimator
+    {
+        return $this->marginEstimator;
+    }
     public function findFiat(string $serviceKey, ?string $subServiceKey = null): ?PlatformRate
     {
         if ($subServiceKey !== null && $subServiceKey !== '') {
@@ -91,13 +99,39 @@ class PlatformRateResolver
     }
 
     /**
-     * Fiat deposit flat fee (NGN). Fallback default.
+     * Fiat deposit fee (NGN): flat + optional percentage with cap from platform row.
      */
-    public function fiatDepositFeeNgn(float $fallback = 200.0): float
+    public function fiatDepositFeeNgn(float $amount = 0, float $fallback = 200.0): float
     {
         $r = $this->findFiat('deposit', null);
+        if (! $r) {
+            return $fallback;
+        }
 
-        return $r ? (float) $r->fixed_fee_ngn : $fallback;
+        $fee = (float) $r->fixed_fee_ngn;
+        if ($amount > 0 && $r->percentage_fee !== null) {
+            $fee += round($amount * (float) $r->percentage_fee / 100, 2);
+        }
+
+        return $fee;
+    }
+
+    /**
+     * Provider cost for PalmPay / fiat deposit (not charged to user).
+     */
+    public function fiatDepositProviderCostNgn(float $amount): float
+    {
+        $r = $this->findFiat('deposit', null);
+        if (! $r || $amount <= 0) {
+            return 0.0;
+        }
+
+        return $this->marginEstimator->providerCostFromRate($r, $amount, null)['ngn'];
+    }
+
+    public function billUsesCommissionRevenue(string $billCategoryCode): bool
+    {
+        return in_array(strtolower($billCategoryCode), ['airtime', 'data', 'betting'], true);
     }
 
     /**
@@ -115,6 +149,10 @@ class PlatformRateResolver
      */
     public function billPaymentFeeNgn(float $amount, string $currency, string $billCategoryCode): float
     {
+        if ($this->billUsesCommissionRevenue($billCategoryCode)) {
+            return 0.0;
+        }
+
         $r = $this->findFiat('bill_payment', $billCategoryCode);
         if (! $r) {
             $r = $this->findFiat('bill_payment', null);

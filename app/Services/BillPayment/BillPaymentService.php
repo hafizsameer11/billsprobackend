@@ -23,7 +23,8 @@ class BillPaymentService
     public function __construct(
         AuthService $authService,
         WalletService $walletService,
-        protected PlatformRateResolver $platformRates
+        protected PlatformRateResolver $platformRates,
+        protected BillPaymentCommissionMetadata $commissionMetadata,
     ) {
         $this->authService = $authService;
         $this->walletService = $walletService;
@@ -476,6 +477,8 @@ class BillPaymentService
                 'status' => 'completed',
                 'completed_at' => now(),
             ]);
+
+            $this->commissionMetadata->applyOnCompleted($transaction->fresh());
 
             // Generate recharge token for prepaid electricity
             $rechargeToken = null;

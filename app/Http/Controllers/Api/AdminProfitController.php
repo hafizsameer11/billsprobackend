@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ServiceProfitSetting;
 use App\Models\Transaction;
 use App\Services\Admin\AdminAuditService;
+use App\Services\Admin\PricingCatalogService;
 use App\Services\Admin\ProfitReportingService;
 use App\Services\Admin\TransactionPlatformRateSnapshot;
 use App\Services\Admin\TransactionRevenueClassifier;
@@ -18,10 +19,16 @@ class AdminProfitController extends Controller
 {
     public function __construct(
         protected ProfitReportingService $profit,
+        protected PricingCatalogService $catalog,
         protected AdminAuditService $audit,
         protected TransactionPlatformRateSnapshot $rateSnapshot,
         protected TransactionRevenueClassifier $revenueClassifier,
     ) {}
+
+    public function catalog(): JsonResponse
+    {
+        return ResponseHelper::success($this->catalog->buildCatalog(), 'Pricing catalog.');
+    }
 
     public function settings(): JsonResponse
     {
@@ -42,6 +49,12 @@ class AdminProfitController extends Controller
             'fixed_fee' => ['required', 'numeric', 'min:0'],
             'percentage' => ['required', 'numeric', 'min:0', 'max:100'],
             'percentage_basis' => ['required', 'string', Rule::in(['amount', 'total_amount', 'fee', 'ngn_notional'])],
+            'margin_mode' => ['sometimes', 'string', Rule::in(['ledger_rule', 'charge_minus_cost', 'commission'])],
+            'provider_cost_ngn' => ['nullable', 'numeric', 'min:0'],
+            'provider_cost_usd' => ['nullable', 'numeric', 'min:0'],
+            'provider_pct' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'provider_pct_cap_ngn' => ['nullable', 'numeric', 'min:0'],
+            'linked_rate_slug' => ['nullable', 'string', 'max:191'],
             'is_active' => ['required', 'boolean'],
         ]);
 
@@ -161,6 +174,12 @@ class AdminProfitController extends Controller
             'percentage_basis' => $s->percentage_basis,
             'is_active' => $s->is_active,
             'sort_order' => $s->sort_order,
+            'margin_mode' => $s->margin_mode ?? 'ledger_rule',
+            'provider_cost_ngn' => $s->provider_cost_ngn !== null ? (string) $s->provider_cost_ngn : null,
+            'provider_cost_usd' => $s->provider_cost_usd !== null ? (string) $s->provider_cost_usd : null,
+            'provider_pct' => $s->provider_pct !== null ? (string) $s->provider_pct : null,
+            'provider_pct_cap_ngn' => $s->provider_pct_cap_ngn !== null ? (string) $s->provider_pct_cap_ngn : null,
+            'linked_rate_slug' => $s->linked_rate_slug,
             'updated_at' => $s->updated_at?->toIso8601String(),
         ];
     }

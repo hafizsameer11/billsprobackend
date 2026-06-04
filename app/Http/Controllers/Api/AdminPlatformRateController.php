@@ -6,6 +6,7 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Models\PlatformRate;
 use App\Models\WalletCurrency;
+use App\Services\Platform\PlatformRateMarginEstimator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,10 @@ use Illuminate\Validation\Rule;
 
 class AdminPlatformRateController extends Controller
 {
+    public function __construct(
+        protected PlatformRateMarginEstimator $marginEstimator,
+    ) {}
+
     public function meta(): JsonResponse
     {
         $fiatServices = [
@@ -55,6 +60,8 @@ class AdminPlatformRateController extends Controller
             ['key' => 'withdraw', 'label' => 'Withdraw from card'],
             ['key' => 'visa_creation', 'label' => 'Visa — card creation'],
             ['key' => 'visa_fund', 'label' => 'Visa — deposit / fund card'],
+            ['key' => 'decline_fee', 'label' => 'Mastercard — decline fee (2nd+)'],
+            ['key' => 'visa_decline_fee', 'label' => 'Visa — decline fee (2nd+)'],
         ];
 
         return ResponseHelper::success([
@@ -157,6 +164,11 @@ class AdminPlatformRateController extends Controller
             'percentage_fee' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'min_fee_ngn' => ['nullable', 'numeric', 'min:0'],
             'fee_usd' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+            'provider_cost_ngn' => ['nullable', 'numeric', 'min:0'],
+            'provider_cost_usd' => ['nullable', 'numeric', 'min:0'],
+            'provider_pct' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'provider_pct_cap_ngn' => ['nullable', 'numeric', 'min:0'],
+            'display_label' => ['nullable', 'string', 'max:120'],
             'is_active' => ['sometimes', 'boolean'],
         ];
 
@@ -180,6 +192,12 @@ class AdminPlatformRateController extends Controller
             'percentage_fee' => $r->percentage_fee !== null ? (string) $r->percentage_fee : null,
             'min_fee_ngn' => $r->min_fee_ngn !== null ? (string) $r->min_fee_ngn : null,
             'fee_usd' => $r->fee_usd !== null ? (string) $r->fee_usd : null,
+            'provider_cost_ngn' => $r->provider_cost_ngn !== null ? (string) $r->provider_cost_ngn : null,
+            'provider_cost_usd' => $r->provider_cost_usd !== null ? (string) $r->provider_cost_usd : null,
+            'provider_pct' => $r->provider_pct !== null ? (string) $r->provider_pct : null,
+            'provider_pct_cap_ngn' => $r->provider_pct_cap_ngn !== null ? (string) $r->provider_pct_cap_ngn : null,
+            'display_label' => $r->display_label,
+            'margin_preview' => $this->marginEstimator->estimate($r, 10_000, 100),
             'is_active' => (bool) $r->is_active,
             'updated_at' => $r->updated_at?->toIso8601String(),
             'created_at' => $r->created_at?->toIso8601String(),

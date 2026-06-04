@@ -7,6 +7,7 @@ use App\Models\PalmPayBillOrder;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Auth\AuthService;
+use App\Services\BillPayment\BillPaymentCommissionMetadata;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +21,8 @@ class PalmPayBillPaymentOrchestrator
     public function __construct(
         protected PalmPayBillApiService $billApi,
         protected AuthService $authService,
-        protected WalletService $walletService
+        protected WalletService $walletService,
+        protected BillPaymentCommissionMetadata $commissionMetadata,
     ) {}
 
     /**
@@ -175,6 +177,7 @@ class PalmPayBillPaymentOrchestrator
                 'status' => 'completed',
                 'completed_at' => now(),
             ]);
+            $this->commissionMetadata->applyOnCompleted($transaction->fresh());
         }
 
         return [
@@ -274,6 +277,9 @@ class PalmPayBillPaymentOrchestrator
                         'palmpay_webhook_status' => $orderStatus,
                     ]),
                 ]);
+                if ($newStatus === 'completed') {
+                    $this->commissionMetadata->applyOnCompleted($tx->fresh());
+                }
             }
 
             if (($newStatus === 'failed' || $newStatus === 'cancelled') && ! $locked->refunded) {

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\FundCardRequest;
+use App\Http\Requests\VirtualCard\FundingEstimateRequest;
 use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
@@ -28,6 +29,12 @@ class AdminVirtualCardController extends Controller
      */
     public function forUser(Request $request, User $user): JsonResponse
     {
+        try {
+            $this->virtualCardService->getUserCards((int) $user->id);
+        } catch (\Throwable) {
+            // Fall back to cached DB rows if provider sync fails.
+        }
+
         $status = (string) $request->query('status', 'all');
         $q = VirtualCard::query()->where('user_id', $user->id)->orderBy('id');
 
@@ -292,6 +299,8 @@ class AdminVirtualCardController extends Controller
             ? (string) $t->reference
             : 'VCT-'.$t->id;
 
+        $scheme = $card && strtolower((string) $card->card_type) === 'visa' ? 'visa' : 'mastercard';
+
         return [
             'id' => $publicId,
             'database_id' => $t->id,
@@ -299,6 +308,7 @@ class AdminVirtualCardController extends Controller
             'amount' => $this->formatVirtualCardTxAmount($t),
             'status' => $this->mapVcTxUiStatus((string) $t->status),
             'card_label' => $cardLabel,
+            'card_scheme' => $scheme,
             'sub_type' => $this->mapVcTxSubType((string) $t->type),
             'date' => $t->created_at?->timezone(config('app.timezone'))->format('m/d/y - h:i A') ?? '',
             'kind' => $this->mapVcTxKind((string) $t->type),
@@ -311,6 +321,10 @@ class AdminVirtualCardController extends Controller
     {
         $currency = strtoupper((string) $t->currency);
         $total = (float) $t->total_amount;
+        $card = $t->virtualCard;
+        if ($card && strtolower((string) $card->card_type) === 'visa' && $currency === 'USD' && $total >= 1_000_000.0) {
+            $total = $total / 1_000_000.0;
+        }
 
         if ($currency === 'USD') {
             return '$'.number_format($total, 2, '.', ',');
@@ -365,8 +379,47 @@ class AdminVirtualCardController extends Controller
     public function show(int $id): JsonResponse
     {
         $card = VirtualCard::query()->with('user')->findOrFail($id);
+        $this->virtualCardService->ensurePagocardsBillingPersisted($card);
+        $refreshed = $this->virtualCardService->getCard((int) $card->user_id, $id);
 
-        return ResponseHelper::success($card, 'Virtual card retrieved.');
+        if (! $refreshed) {
+            return ResponseHelper::notFound('Virtual card not found');
+        }
+
+        $this->virtualCardService->ensurePagocardsBillingPersisted($refreshed);
+
+        return ResponseHelper::success($refreshed->load('user'), 'Virtual card retrieved.');
+    }
+
+    /**
+     * Funding quote for admin load (Mastercard `fund` vs Visa `visa_fund` platform rates).
+     */
+    public function fundingEstimate(FundingEstimateRequest $request, int $id): JsonResponse
+    {
+        $card = VirtualCard::query()->findOrFail($id);
+        $v = $request->validated();
+        $principal = (float) $v['amount'];
+        $walletType = (string) $v['payment_wallet_type'];
+        $fiat = (string) ($v['payment_wallet_currency'] ?? 'NGN');
+
+        $estimate = strtolower((string) $card->card_type) === 'visa'
+            ? $this->virtualCardService->estimateVisaCardFunding($principal, $walletType, $fiat)
+            : $this->virtualCardService->estimateCardFunding($principal, $walletType, $fiat);
+
+        return ResponseHelper::success($estimate, 'Funding estimate retrieved.')
+            ->header('Cache-Control', 'no-store, private, must-revalidate');
+    }
+
+    /**
+     * Per-card transaction feed (same provider sync + DB merge as mobile GET /virtual-cards/{id}/transactions).
+     */
+    public function cardTransactions(Request $request, int $id): JsonResponse
+    {
+        $card = VirtualCard::query()->findOrFail($id);
+        $limit = min(100, max(1, (int) $request->query('limit', 50)));
+        $transactions = $this->virtualCardService->getCardTransactions((int) $card->user_id, $id, $limit);
+
+        return ResponseHelper::success($transactions, 'Card transactions retrieved.');
     }
 
     public function freeze(Request $request, int $id): JsonResponse

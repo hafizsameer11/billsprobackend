@@ -7,31 +7,54 @@ use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
-/**
- * Admin-configured profit on top of customer-facing pricing from {@see \App\Services\Platform\PlatformRateResolver}
- * and {@see \App\Services\Crypto\CryptoService}.
- *
- * Revenue shape differs by transaction type: fiat/bills use ledger fees; on-chain crypto uses USD-notional fees;
- * buy/sell use NGN notional from metadata (spread), not `transactions.fee` (often zero).
- */
 class ProfitReportingService
 {
+    public function __construct(
+        protected TransactionPricingSnapshotService $snapshots,
+    ) {}
+
     /**
-     * @return array{
-     *   fixed_profit: string,
-     *   percentage_profit: string,
-     *   total_profit: string,
-     *   basis_amount: string,
-     *   basis: string,
-     *   service_key: string,
-     *   setting_label: string|null,
-     *   profit_currency: string|null,
-     *   admin_profit_percent: string|null
-     * }
+     * @return array<string, mixed>
      */
     public function computeForTransaction(Transaction $t, Collection $settingsByKey): array
     {
-        $setting = $this->resolveSetting($t->type ?? '', $settingsByKey);
+        $meta = is_array($t->metadata) ? $t->metadata : [];
+        $snap = $meta['pricing_snapshot'] ?? null;
+        if (! is_array($snap)) {
+            $snap = $this->snapshots->buildForTransaction($t);
+        }
+
+        $revenueNgn = (float) ($snap['customer_revenue_ngn'] ?? $snap['charge_ngn'] ?? (float) $t->fee);
+        if ($revenueNgn <= 0 && isset($meta['estimated_commission_ngn'])) {
+            $revenueNgn = (float) $meta['estimated_commission_ngn'];
+        }
+
+        $providerCostNgn = (float) ($snap['provider_cost_ngn'] ?? 0);
+        $netMargin = (float) ($snap['estimated_profit_ngn'] ?? round($revenueNgn - $providerCostNgn, 2));
+
+        $setting = $this->resolveSetting($t, $settingsByKey);
+        $legacy = $this->computeLegacyRule($t, $setting);
+
+        if ($netMargin == 0.0 && (float) $legacy['total_profit'] > 0) {
+            $netMargin = (float) $legacy['total_profit'];
+            $revenueNgn = (float) $legacy['basis_amount'];
+        }
+
+        return array_merge($legacy, [
+            'customer_revenue_ngn' => $this->fmt($revenueNgn),
+            'provider_cost_ngn' => $this->fmt($providerCostNgn),
+            'net_margin_ngn' => $this->fmt($netMargin),
+            'total_profit' => $this->fmt($netMargin),
+            'pricing_source' => (string) ($snap['source'] ?? 'ledger'),
+            'commission_pct' => isset($meta['commission_pct']) ? (string) $meta['commission_pct'] : null,
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function computeLegacyRule(Transaction $t, ?ServiceProfitSetting $setting): array
+    {
         if (! $setting || ! $setting->is_active) {
             return [
                 'fixed_profit' => '0',
@@ -43,6 +66,20 @@ class ProfitReportingService
                 'setting_label' => null,
                 'profit_currency' => null,
                 'admin_profit_percent' => null,
+            ];
+        }
+
+        if ($setting->margin_mode === 'commission') {
+            return [
+                'fixed_profit' => '0',
+                'percentage_profit' => '0',
+                'total_profit' => '0',
+                'basis_amount' => (string) $t->amount,
+                'basis' => 'amount',
+                'service_key' => (string) $setting->service_key,
+                'setting_label' => $setting->label,
+                'profit_currency' => 'NGN',
+                'admin_profit_percent' => (string) $setting->percentage,
             ];
         }
 
@@ -62,8 +99,6 @@ class ProfitReportingService
         $pctProfit = round($basisAmount * $pct / 100, 8);
         $total = round($fixed + $pctProfit, 8);
 
-        $profitCurrency = $basisKey === 'ngn_notional' ? 'NGN' : null;
-
         return [
             'fixed_profit' => $this->fmt($fixed),
             'percentage_profit' => $this->fmt($pctProfit),
@@ -72,15 +107,11 @@ class ProfitReportingService
             'basis' => $basisKey,
             'service_key' => (string) $setting->service_key,
             'setting_label' => $setting->label,
-            'profit_currency' => $profitCurrency,
-            // Admin “your profit” % from ServiceProfitSetting — not platform_rates.percentage_fee (customer fee).
-            'admin_profit_percent' => $this->fmt((float) $setting->percentage),
+            'profit_currency' => $basisKey === 'ngn_notional' ? 'NGN' : null,
+            'admin_profit_percent' => $this->fmt($pct),
         ];
     }
 
-    /**
-     * NGN economic leg for crypto buy (metadata.payment_amount) and sell (ngn_amount / amount_to_receive).
-     */
     protected function ngnNotionalFromTransaction(Transaction $t): float
     {
         $meta = is_array($t->metadata) ? $t->metadata : [];
@@ -100,15 +131,7 @@ class ProfitReportingService
     }
 
     /**
-     * @return array{
-     *   transaction_count: int,
-     *   sum_transaction_amount: string,
-     *   sum_fee_collected: string,
-     *   sum_principal_amount: string,
-     *   sum_fixed_profit: string,
-     *   sum_percentage_profit: string,
-     *   sum_total_profit: string
-     * }
+     * @return array<string, mixed>
      */
     public function summarize(Builder $query, Collection $settingsByKey): array
     {
@@ -118,18 +141,27 @@ class ProfitReportingService
         $sumAmount = 0.0;
         $sumFee = 0.0;
         $sumPrincipal = 0.0;
+        $sumProviderCost = 0.0;
+        $sumRevenue = 0.0;
+        $sumCommission = 0.0;
         $count = 0;
 
-        $query->clone()->orderBy('id')->chunk(500, function ($rows) use ($settingsByKey, &$sumFixed, &$sumPct, &$sumTotal, &$sumAmount, &$sumFee, &$sumPrincipal, &$count) {
+        $query->clone()->orderBy('id')->chunk(500, function ($rows) use ($settingsByKey, &$sumFixed, &$sumPct, &$sumTotal, &$sumAmount, &$sumFee, &$sumPrincipal, &$sumProviderCost, &$sumRevenue, &$sumCommission, &$count) {
             foreach ($rows as $t) {
                 /** @var Transaction $t */
                 $p = $this->computeForTransaction($t, $settingsByKey);
                 $sumFixed += (float) $p['fixed_profit'];
                 $sumPct += (float) $p['percentage_profit'];
-                $sumTotal += (float) $p['total_profit'];
+                $sumTotal += (float) $p['net_margin_ngn'];
                 $sumAmount += (float) $t->total_amount;
                 $sumFee += (float) $t->fee;
                 $sumPrincipal += (float) $t->amount;
+                $sumProviderCost += (float) $p['provider_cost_ngn'];
+                $sumRevenue += (float) $p['customer_revenue_ngn'];
+                $meta = is_array($t->metadata) ? $t->metadata : [];
+                if (isset($meta['estimated_commission_ngn'])) {
+                    $sumCommission += (float) $meta['estimated_commission_ngn'];
+                }
                 $count++;
             }
         });
@@ -142,6 +174,10 @@ class ProfitReportingService
             'sum_fixed_profit' => $this->fmt($sumFixed),
             'sum_percentage_profit' => $this->fmt($sumPct),
             'sum_total_profit' => $this->fmt($sumTotal),
+            'sum_net_margin' => $this->fmt($sumTotal),
+            'sum_provider_cost' => $this->fmt($sumProviderCost),
+            'sum_customer_revenue' => $this->fmt($sumRevenue),
+            'sum_commission' => $this->fmt($sumCommission),
         ];
     }
 
@@ -154,8 +190,23 @@ class ProfitReportingService
             ->keyBy('service_key');
     }
 
-    protected function resolveSetting(string $type, Collection $settingsByKey): ?ServiceProfitSetting
+    protected function resolveSetting(Transaction $t, Collection $settingsByKey): ?ServiceProfitSetting
     {
+        $type = (string) ($t->type ?? '');
+
+        if ($type === 'bill_payment') {
+            $cat = strtolower((string) ($t->category ?? ''));
+            if ($cat === 'betting') {
+                return $settingsByKey->get('bill_commission_betting') ?? $settingsByKey->get('bill_payment');
+            }
+            if (in_array($cat, ['airtime', 'data'], true)) {
+                return $settingsByKey->get('bill_commission_airtime') ?? $settingsByKey->get('bill_payment');
+            }
+        }
+        if ($type === 'deposit') {
+            return $settingsByKey->get('palmpay_deposit') ?? $settingsByKey->get('deposit');
+        }
+
         if ($type !== '' && $settingsByKey->has($type)) {
             return $settingsByKey->get($type);
         }

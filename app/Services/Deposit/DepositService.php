@@ -187,7 +187,7 @@ class DepositService
      */
     protected function calculateFee(float $amount): float
     {
-        return $this->platformRates->fiatDepositFeeNgn(200.0);
+        return $this->platformRates->fiatDepositFeeNgn($amount, 0.0);
     }
 
     /**

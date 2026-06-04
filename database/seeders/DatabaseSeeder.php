@@ -16,6 +16,8 @@ class DatabaseSeeder extends Seeder
             BillPaymentCategorySeeder::class,
             WalletCurrencySeeder::class,
             PlatformRateSeeder::class,
+            CommissionTablesSeeder::class,
+            PdfPricingDefaultsSeeder::class,
         ]);
     }
 }

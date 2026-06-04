@@ -3,6 +3,7 @@
 namespace App\Services\PalmPay;
 
 use App\Helpers\NotificationHelper;
+use App\Services\Admin\TransactionPricingSnapshotService;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\PalmPayDepositOrder;
@@ -16,7 +17,8 @@ use RuntimeException;
 class PalmPayDepositService
 {
     public function __construct(
-        protected PalmPayCheckoutService $checkout
+        protected PalmPayCheckoutService $checkout,
+        protected TransactionPricingSnapshotService $pricingSnapshots,
     ) {}
 
     /**
@@ -232,6 +234,7 @@ class PalmPayDepositService
                 'metadata' => [
                     'deposit_id' => $deposit->id,
                     'payment_method' => 'palmpay',
+                    'provider' => 'palmpay',
                     'merchant_order_id' => $order->merchant_order_id,
                     'palmpay_order_no' => $palmpayOrderNo,
                 ],
@@ -249,6 +252,8 @@ class PalmPayDepositService
                     'palmpay_order_no' => $palmpayOrderNo,
                 ]),
             ]);
+
+            $this->pricingSnapshots->attachToTransaction($transaction->fresh());
 
             $order->update([
                 'palmpay_order_no' => $palmpayOrderNo,
