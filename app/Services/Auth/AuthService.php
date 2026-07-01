@@ -329,7 +329,7 @@ class AuthService
         return [
             'success' => true,
             'message' => 'Login successful',
-            'user' => $user,
+            'user' => $user->makeVisible(['is_admin']),
             'token' => $token,
         ];
     }
