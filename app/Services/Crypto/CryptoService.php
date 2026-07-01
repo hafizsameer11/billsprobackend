@@ -526,6 +526,9 @@ class CryptoService
                 : (float) ($walletCurrency->rate ?? 0));
 
         $ngnPerUsd = $this->ngnPerUsd();
+        $fxMarkupNgn = 0.0;
+        $effectiveNgnPerUsd = $ngnPerUsd;
+        $usesExplicitNgnPerCrypto = false;
 
         // Admin overrides for buy/sell: `exchange_rate_ngn_per_usd` = NGN charged (buy) or paid (sell) per 1 whole crypto unit.
         if ($isBuyWithNgn) {
@@ -533,12 +536,20 @@ class CryptoService
             if ($buyRow && $buyRow->exchange_rate_ngn_per_usd !== null && (float) $buyRow->exchange_rate_ngn_per_usd > 0) {
                 $ngnPerCrypto = (float) $buyRow->exchange_rate_ngn_per_usd;
                 $rateUsdPerCrypto = $ngnPerCrypto / max($ngnPerUsd, 0.0000001);
+                $usesExplicitNgnPerCrypto = true;
+            } else {
+                $fxMarkupNgn = $this->platformRates->cryptoTradeFxMarkupNgn('buy', $cryptoCurrency, $blockchain);
+                $effectiveNgnPerUsd = $ngnPerUsd + $fxMarkupNgn;
             }
         } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
             $sellRow = $this->platformRates->findCrypto('sell', $cryptoCurrency, $blockchain);
             if ($sellRow && $sellRow->exchange_rate_ngn_per_usd !== null && (float) $sellRow->exchange_rate_ngn_per_usd > 0) {
                 $ngnPerCrypto = (float) $sellRow->exchange_rate_ngn_per_usd;
                 $rateUsdPerCrypto = $ngnPerCrypto / max($ngnPerUsd, 0.0000001);
+                $usesExplicitNgnPerCrypto = true;
+            } else {
+                $fxMarkupNgn = $this->platformRates->cryptoTradeFxMarkupNgn('sell', $cryptoCurrency, $blockchain);
+                $effectiveNgnPerUsd = max(0.0001, $ngnPerUsd - $fxMarkupNgn);
             }
         }
 
@@ -552,17 +563,28 @@ class CryptoService
         $exchangeRate = 1.0;
 
         if ($fromCurrency === 'NGN' && $toCurrency !== 'NGN') {
-            $ngnToUsd = 1 / $ngnPerUsd;
+            $ngnToUsd = 1 / $effectiveNgnPerUsd;
             $exchangeRate = $ngnToUsd / $rateUsdPerCrypto;
             $cryptoAmount = $amount * $exchangeRate;
             $fiatAmount = $amount;
         } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
-            $exchangeRate = $rateUsdPerCrypto * $ngnPerUsd;
+            $exchangeRate = $rateUsdPerCrypto * $effectiveNgnPerUsd;
             $cryptoAmount = $amount;
             $fiatAmount = $amount * $exchangeRate;
         } else {
             $cryptoAmount = $amount;
             $fiatAmount = $amount;
+        }
+
+        $marketNgnPerUsd = max(0.0001, $ngnPerUsd);
+        $impliedFxFeeNgn = 0.0;
+        if (! $usesExplicitNgnPerCrypto && $fxMarkupNgn > 0 && $amount > 0) {
+            if ($isBuyWithNgn) {
+                $impliedFxFeeNgn = round(max(0.0, $amount - ($cryptoAmount * $rateUsdPerCrypto * $marketNgnPerUsd)), 2);
+            } elseif ($fromCurrency !== 'NGN' && $toCurrency === 'NGN') {
+                $fiatAtMarket = $amount * $rateUsdPerCrypto * $marketNgnPerUsd;
+                $impliedFxFeeNgn = round(max(0.0, $fiatAtMarket - $fiatAmount), 2);
+            }
         }
 
         return [
@@ -578,6 +600,10 @@ class CryptoService
                 'rate' => $rateUsdPerCrypto,
                 'rate_buy' => $walletCurrency->usdPerUnitForBuy(),
                 'rate_sell' => $walletCurrency->usdPerUnitForSell(),
+                'fx_markup_ngn' => $fxMarkupNgn,
+                'ngn_per_usd' => $ngnPerUsd,
+                'ngn_per_usd_effective' => $effectiveNgnPerUsd,
+                'implied_fx_fee_ngn' => $impliedFxFeeNgn,
             ],
         ];
     }
@@ -622,6 +648,8 @@ class CryptoService
 
         $cryptoAmount = $rateData['data']['crypto_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
+        $fxMarkupNgn = (float) ($rateData['data']['fx_markup_ngn'] ?? 0);
+        $impliedFxFeeNgn = (float) ($rateData['data']['implied_fx_fee_ngn'] ?? 0);
 
         return [
             'success' => true,
@@ -634,7 +662,8 @@ class CryptoService
                 'crypto_amount' => $cryptoAmount,
                 'fee_percent' => 0.0,
                 'fee_in_crypto' => 0.0,
-                'fee_in_payment_currency' => 0.0,
+                'fee_in_payment_currency' => $impliedFxFeeNgn,
+                'fx_markup_ngn' => $fxMarkupNgn,
                 'total_crypto_amount' => $cryptoAmount,
                 'total_amount' => $amount,
                 'exchange_rate' => $exchangeRate,
@@ -876,6 +905,8 @@ class CryptoService
 
         $ngnAmount = $rateData['data']['fiat_amount'];
         $exchangeRate = $rateData['data']['exchange_rate'];
+        $fxMarkupNgn = (float) ($rateData['data']['fx_markup_ngn'] ?? 0);
+        $impliedFxFeeNgn = (float) ($rateData['data']['implied_fx_fee_ngn'] ?? 0);
 
         return [
             'success' => true,
@@ -886,7 +917,8 @@ class CryptoService
                 'crypto_amount' => $amount,
                 'fee_percent' => 0.0,
                 'fee_in_crypto' => 0.0,
-                'fee_in_ngn' => 0.0,
+                'fee_in_ngn' => $impliedFxFeeNgn,
+                'fx_markup_ngn' => $fxMarkupNgn,
                 'total_crypto_amount' => $amount,
                 'ngn_amount' => $ngnAmount,
                 'amount_to_receive' => $ngnAmount,
@@ -1030,6 +1062,7 @@ class CryptoService
         $amount = (float) $data['amount'];
         $address = $data['address'];
         $network = $data['network'] ?? $blockchain;
+        $idempotencyKey = trim((string) ($data['idempotency_key'] ?? ''));
 
         if ($amount <= 0) {
             return [
@@ -1062,6 +1095,30 @@ class CryptoService
 
         $normalizedChain = DepositAddressService::normalizeBlockchain($blockchain);
 
+        if ($idempotencyKey !== '') {
+            $existing = Transaction::query()
+                ->where('user_id', $userId)
+                ->where('type', 'crypto_withdrawal')
+                ->where('metadata->idempotency_key', $idempotencyKey)
+                ->orderByDesc('id')
+                ->first();
+
+            if ($existing) {
+                if ($existing->status === 'completed') {
+                    return $this->formatSendCryptoSuccess($existing);
+                }
+
+                if ($existing->status === 'pending') {
+                    $existingHash = $existing->metadata['tx_hash'] ?? null;
+                    if (is_string($existingHash) && $existingHash !== '') {
+                        return $this->formatSendCryptoSuccess($existing);
+                    }
+
+                    return $this->broadcastPendingCryptoSend($userId, $existing, $currency, $blockchain, $normalizedChain, $amount, $address);
+                }
+            }
+        }
+
         $masterWallet = null;
         if (! config('tatum.use_mock')) {
             $masterWallet = MasterWallet::query()
@@ -1076,7 +1133,7 @@ class CryptoService
             }
         }
 
-        $ledger = DB::transaction(function () use ($userId, $currency, $blockchain, $amount, $feeInCrypto, $totalAmount, $address, $network) {
+        $ledger = DB::transaction(function () use ($userId, $currency, $blockchain, $amount, $feeInCrypto, $totalAmount, $address, $network, $idempotencyKey) {
             $account = VirtualAccount::where('user_id', $userId)
                 ->where('currency', $currency)
                 ->where('blockchain', $blockchain)
@@ -1121,6 +1178,8 @@ class CryptoService
                     'settlement' => 'master_wallet',
                     'master_wallet_send' => true,
                     'tx_hash' => null,
+                    'idempotency_key' => $idempotencyKey !== '' ? $idempotencyKey : null,
+                    'virtual_account_id' => $account->id,
                 ],
                 'completed_at' => null,
             ]);
@@ -1245,6 +1304,130 @@ class CryptoService
                 'account_balance' => (string) $newBal,
             ]);
         });
+    }
+
+    /**
+     * @return array{success: bool, message?: string, data?: array<string, mixed>}
+     */
+    private function formatSendCryptoSuccess(Transaction $tx): array
+    {
+        $metadata = $tx->metadata ?? [];
+        $virtualAccountId = (int) ($metadata['virtual_account_id'] ?? 0);
+        $account = $virtualAccountId > 0
+            ? VirtualAccount::query()->find($virtualAccountId)
+            : null;
+
+        return [
+            'success' => true,
+            'message' => 'Crypto send already processed.',
+            'data' => [
+                'transaction' => $tx->fresh(),
+                'account' => $account ? $this->formatAccount($account) : null,
+                'tx_hash' => $metadata['tx_hash'] ?? null,
+                'payout_status' => 'completed',
+            ],
+        ];
+    }
+
+    /**
+     * @return array{success: bool, message?: string, data?: array<string, mixed>}
+     */
+    private function broadcastPendingCryptoSend(
+        int $userId,
+        Transaction $tx,
+        string $currency,
+        string $blockchain,
+        string $normalizedChain,
+        float $amount,
+        string $address
+    ): array {
+        if (config('tatum.use_mock')) {
+            $mockHash = '0x'.bin2hex(random_bytes(16));
+            $tx->update([
+                'status' => 'completed',
+                'completed_at' => now(),
+                'metadata' => array_merge($tx->metadata ?? [], [
+                    'tx_hash' => $mockHash,
+                    'tatum_mock' => true,
+                ]),
+            ]);
+
+            return $this->formatSendCryptoSuccess($tx);
+        }
+
+        $masterWallet = MasterWallet::query()
+            ->where('blockchain', $normalizedChain)
+            ->with('secret')
+            ->first();
+
+        if (! $masterWallet) {
+            return [
+                'success' => false,
+                'message' => "No master wallet configured for blockchain \"{$normalizedChain}\".",
+            ];
+        }
+
+        try {
+            $broadcast = $this->tatumOutbound->sendExternalFromMasterWallet(
+                $masterWallet,
+                $address,
+                (string) $amount,
+                $currency,
+                $normalizedChain
+            );
+        } catch (\Throwable $e) {
+            $virtualAccountId = (int) (($tx->metadata ?? [])['virtual_account_id'] ?? 0);
+            if ($virtualAccountId > 0) {
+                $this->refundVirtualAccountSend($userId, $virtualAccountId, (float) $tx->total_amount);
+            }
+            $tx->update([
+                'status' => 'failed',
+                'metadata' => array_merge($tx->metadata ?? [], [
+                    'error' => $e->getMessage(),
+                    'broadcast_failed_at' => now()->toIso8601String(),
+                ]),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'On-chain send failed: '.$e->getMessage(),
+            ];
+        }
+
+        $tx->update([
+            'status' => 'completed',
+            'completed_at' => now(),
+            'metadata' => array_merge($tx->metadata ?? [], [
+                'tx_hash' => $broadcast['txId'],
+                'network_fee_actual' => $broadcast['fee'] ?? null,
+            ]),
+        ]);
+
+        MasterWalletTransaction::create([
+            'master_wallet_id' => $masterWallet->id,
+            'user_id' => $userId,
+            'type' => 'external_send',
+            'blockchain' => $normalizedChain,
+            'currency' => strtoupper($currency),
+            'from_address' => $masterWallet->address,
+            'to_address' => $address,
+            'amount' => (string) $amount,
+            'network_fee' => $broadcast['fee'] ?? null,
+            'tx_hash' => $broadcast['txId'],
+            'internal_transaction_id' => $tx->transaction_id,
+            'metadata' => ['tatum' => $broadcast['raw'] ?? []],
+        ]);
+
+        return [
+            'success' => true,
+            'message' => 'Crypto sent on-chain from master wallet.',
+            'data' => [
+                'transaction' => $tx->fresh(),
+                'account' => null,
+                'tx_hash' => $broadcast['txId'],
+                'payout_status' => 'completed',
+            ],
+        ];
     }
 
     /**

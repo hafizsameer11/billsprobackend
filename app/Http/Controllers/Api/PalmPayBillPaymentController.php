@@ -6,6 +6,7 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Services\PalmPay\PalmPayBillApiService;
 use App\Services\PalmPay\PalmPayBillPaymentOrchestrator;
+use App\Services\Http\IdempotencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -112,11 +113,18 @@ class PalmPayBillPaymentController extends Controller
         ]);
 
         try {
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'palmpay.bill.create-order');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
             $normalizedRechargeAccount = $this->normalizeRechargeAccount(
                 (string) $request->input('rechargeAccount'),
                 (string) $request->input('sceneCode')
             );
-            $result = $this->orchestrator->createOrder($request->user()->id, [
+            $result = $this->orchestrator->createOrder($userId, [
                 'sceneCode' => $request->input('sceneCode'),
                 'billerId' => $request->input('billerId'),
                 'itemId' => $request->input('itemId'),
@@ -129,7 +137,10 @@ class PalmPayBillPaymentController extends Controller
                 'pin' => $request->input('pin'),
             ]);
 
-            return ResponseHelper::success($result, 'Bill order created.');
+            $response = ResponseHelper::success($result, 'Bill order created.');
+            $idempotency->store($request, $userId, 'palmpay.bill.create-order', 200, $response->getData(true));
+
+            return $response;
         } catch (\Throwable $e) {
             Log::error('PalmPay bill create failed', ['e' => $e->getMessage()]);
 

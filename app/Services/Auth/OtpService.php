@@ -16,7 +16,7 @@ class OtpService
      */
     public function generateOtp(): string
     {
-        return str_pad((string) rand(10000, 99999), 5, '0', STR_PAD_LEFT);
+        return str_pad((string) random_int(10000, 99999), 5, '0', STR_PAD_LEFT);
     }
 
     /**
@@ -88,28 +88,45 @@ class OtpService
      */
     public function verifyOtp(string $otp, string $email = null, string $phoneNumber = null, string $type = 'email'): array
     {
-        $query = OtpVerification::where('otp', $otp)
+        $baseQuery = OtpVerification::query()
             ->where('type', $type)
             ->where('verified', false)
             ->where('expires_at', '>', Carbon::now());
 
         if ($type === 'email' && $email) {
-            $query->where('email', $email);
+            $baseQuery->where('email', $email);
         } elseif ($type === 'phone' && $phoneNumber) {
-            $query->where('phone_number', $phoneNumber);
+            $baseQuery->where('phone_number', $phoneNumber);
         }
 
-        $otpVerification = $query->first();
+        $latest = (clone $baseQuery)->orderByDesc('id')->first();
 
-        if (!$otpVerification) {
+        if (! $latest) {
             return [
                 'success' => false,
                 'message' => 'Invalid or expired OTP',
             ];
         }
 
-        // Mark OTP as verified
-        $otpVerification->update(['verified' => true]);
+        if ((int) $latest->failed_attempts >= 5) {
+            $latest->update(['verified' => true]);
+
+            return [
+                'success' => false,
+                'message' => 'Too many failed attempts. Request a new OTP.',
+            ];
+        }
+
+        if (! hash_equals((string) $latest->otp, $otp)) {
+            $latest->increment('failed_attempts');
+
+            return [
+                'success' => false,
+                'message' => 'Invalid or expired OTP',
+            ];
+        }
+
+        $latest->update(['verified' => true]);
 
         return [
             'success' => true,

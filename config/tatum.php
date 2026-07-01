@@ -26,6 +26,14 @@ return [
      */
     'use_mock' => filter_var(env('TATUM_USE_MOCK', false), FILTER_VALIDATE_BOOL),
 
+    /**
+     * HMAC secret for verifying inbound Tatum webhooks (x-payload-hash).
+     * Enable on Tatum via PUT /v4/subscription with { "hmacSecret": "..." }.
+     */
+    'hmac_secret' => env('TATUM_WEBHOOK_HMAC_SECRET'),
+
+    'verify_webhook_hmac' => filter_var(env('TATUM_VERIFY_WEBHOOK_HMAC', true), FILTER_VALIDATE_BOOL),
+
     /*
     |--------------------------------------------------------------------------
     | ERC-20 / BEP-20 / TRC-20 contract addresses (mainnet defaults)

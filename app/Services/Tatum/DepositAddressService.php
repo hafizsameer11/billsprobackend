@@ -52,6 +52,31 @@ class DepositAddressService
     }
 
     /**
+     * Match a monitored deposit address from webhook `to` / `address`.
+     * EVM (0x…) is matched case-insensitively; UTXO / TRON / other chains are exact.
+     */
+    public static function findByIncomingAddress(string $incomingAddress): ?CryptoDepositAddress
+    {
+        $trimmed = trim($incomingAddress);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $baseQuery = CryptoDepositAddress::query()->with(['virtualAccount.walletCurrency']);
+
+        $exact = (clone $baseQuery)->where('address', $trimmed)->first();
+        if ($exact) {
+            return $exact;
+        }
+
+        if (str_starts_with($trimmed, '0x')) {
+            return (clone $baseQuery)->whereRaw('LOWER(address) = ?', [strtolower($trimmed)])->first();
+        }
+
+        return null;
+    }
+
+    /**
      * Return persisted deposit address for this virtual account, creating Tatum address + webhooks on first use.
      */
     public function ensureDepositAddressForVirtualAccount(VirtualAccount $virtualAccount): string

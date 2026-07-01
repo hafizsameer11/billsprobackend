@@ -99,6 +99,24 @@ class PlatformRateResolver
     }
 
     /**
+     * NGN FX spread markup per 1 USD notional on crypto buy/sell (admin `platform_rates.fixed_fee_ngn`).
+     * Falls back from asset-specific row to global buy/sell row.
+     */
+    public function cryptoTradeFxMarkupNgn(string $serviceKey, ?string $cryptoAsset = null, ?string $networkKey = null): float
+    {
+        if (! in_array($serviceKey, ['buy', 'sell'], true)) {
+            return 0.0;
+        }
+
+        $row = $this->findCrypto($serviceKey, $cryptoAsset, $networkKey);
+        if (! $row) {
+            return 0.0;
+        }
+
+        return max(0.0, (float) $row->fixed_fee_ngn);
+    }
+
+    /**
      * Fiat deposit fee (NGN): flat + optional percentage with cap from platform row.
      */
     public function fiatDepositFeeNgn(float $amount = 0, float $fallback = 200.0): float

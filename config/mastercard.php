@@ -26,6 +26,9 @@ return [
 
     'merchant_base_url' => rtrim((string) (env('MASTERCARD_API_MERCHANT_BASE_URL') ?: env('MASTERCARD_API_BASE_URL') ?: $pagoApiBase), '/'),
 
+    /** Secret path segment for inbound Pagocards webhooks (register full URL in Pagocards dashboard). */
+    'webhook_token' => env('PAGOCARDS_WEBHOOK_TOKEN'),
+
     /** When true, also call POST /mastercard/getcardtransactions after getcarddetails (default: false). */
     'use_dedicated_transactions_endpoint' => filter_var(
         env('MASTERCARD_USE_DEDICATED_TX_ENDPOINT', 'false'),

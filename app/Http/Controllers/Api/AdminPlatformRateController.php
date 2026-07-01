@@ -37,8 +37,8 @@ class AdminPlatformRateController extends Controller
         $cryptoServices = [
             ['key' => 'deposit', 'label' => 'Deposit (on-chain receive)'],
             ['key' => 'withdrawal', 'label' => 'Send / withdrawal (on-chain out)'],
-            ['key' => 'buy', 'label' => 'Buy (exchange rate only — no extra fees)'],
-            ['key' => 'sell', 'label' => 'Sell (exchange rate only — no extra fees)'],
+            ['key' => 'buy', 'label' => 'Buy — FX markup (`fixed_fee_ngn` per $1 USD notional on NGN/USD leg)'],
+            ['key' => 'sell', 'label' => 'Sell — FX markup (`fixed_fee_ngn` per $1 USD notional on NGN/USD leg)'],
         ];
 
         $cryptoAssets = WalletCurrency::query()

@@ -3,142 +3,202 @@
 namespace Database\Seeders;
 
 use App\Models\PlatformRate;
+use App\Models\ServiceProfitSetting;
 use App\Models\WalletCurrency;
 use Illuminate\Database\Seeder;
 
 /**
- * Applies PDF default provider costs and customer charges on top of PlatformRateSeeder rows.
+ * Applies the BillsPro Pricing & Profit Margin Table (PDF) to `platform_rates`
+ * and links `service_profit_settings` for admin profit reporting.
+ *
+ * Prerequisites: PlatformRateSeeder, WalletCurrencySeeder, CommissionTablesSeeder.
+ *
+ *   php artisan db:seed --class=PdfPricingDefaultsSeeder
  */
 class PdfPricingDefaultsSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->patchRate('fiat', 'withdrawal', null, null, null, [
-            'display_label' => 'Bank Transfer',
-            'fixed_fee_ngn' => 50,
-            'provider_cost_ngn' => 25,
-        ]);
+        $pricing = config('billspro_pricing', []);
+        $fxMarkup = (float) ($pricing['fx_markup_ngn'] ?? 80);
 
-        $this->patchRate('fiat', 'deposit', null, null, null, [
-            'display_label' => 'Wallet Deposit (PalmPay)',
-            'fixed_fee_ngn' => 0,
-            'percentage_fee' => 0,
-            'provider_pct' => 0.7,
-            'provider_pct_cap_ngn' => 700,
-        ]);
+        foreach ($pricing['fiat'] ?? [] as $serviceKey => $row) {
+            $this->patchRate('fiat', $serviceKey, null, null, null, $this->rowToPatch($row));
+        }
 
-        $this->patchRate('virtual_card', 'creation', null, null, null, [
-            'display_label' => 'Mastercard Card Issuance',
-            'fee_usd' => 3,
-            'provider_cost_usd' => 1.5,
-        ]);
+        foreach ($pricing['virtual_card'] ?? [] as $serviceKey => $row) {
+            $patch = $this->rowToPatch($row);
+            if (! empty($row['fx_markup_ngn'])) {
+                $patch['fixed_fee_ngn'] = $fxMarkup;
+            }
+            $this->patchOrCreateVirtualCardRate($serviceKey, $patch);
+        }
 
-        $this->patchRate('virtual_card', 'fund', null, null, null, [
-            'display_label' => 'Mastercard Card Funding',
-            'fee_usd' => 1,
-            'percentage_fee' => 1,
-            'provider_cost_usd' => 1,
-            'provider_pct' => 1,
-        ]);
+        $deposit = $pricing['crypto']['deposit'] ?? [];
+        $depositPatch = $this->rowToPatch($deposit);
+        $this->patchRate('crypto', 'deposit', null, null, null, $depositPatch);
 
-        $this->patchRate('virtual_card', 'visa_creation', null, null, null, [
-            'display_label' => 'Visa Card Issuance',
-            'fee_usd' => 6,
-            'provider_cost_usd' => 4,
-        ]);
+        foreach (['buy', 'sell'] as $tradeKey) {
+            $trade = $pricing['crypto'][$tradeKey] ?? [];
+            $tradePatch = $this->rowToPatch($trade);
+            if (! empty($trade['fixed_fee_ngn'])) {
+                $tradePatch['fixed_fee_ngn'] = $fxMarkup;
+            }
+            $this->patchRate('crypto', $tradeKey, null, null, null, $tradePatch);
+        }
 
-        $this->patchRate('virtual_card', 'visa_fund', null, null, null, [
-            'display_label' => 'Visa Card Funding',
-            'fee_usd' => 1,
-            'percentage_fee' => 2,
-            'provider_cost_usd' => 1,
-            'provider_pct' => 2,
-        ]);
+        $this->applyCryptoDepositFees($depositPatch);
+        $this->applyCryptoSendFees($pricing['crypto']['send_fees'] ?? []);
 
-        $this->ensureDeclineRates();
+        $this->syncServiceProfitSettings($pricing['service_profit_links'] ?? []);
+    }
 
-        $cryptoReceive = [
-            'display_label' => 'Crypto Receive',
-            'fee_usd' => 1,
-            'provider_cost_usd' => 0,
-        ];
-        $this->patchRate('crypto', 'deposit', null, null, null, $cryptoReceive);
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    protected function rowToPatch(array $row): array
+    {
+        $patch = [];
+        if (isset($row['label'])) {
+            $patch['display_label'] = $row['label'];
+        }
+        foreach ([
+            'fixed_fee_ngn',
+            'percentage_fee',
+            'min_fee_ngn',
+            'fee_usd',
+            'provider_cost_ngn',
+            'provider_cost_usd',
+            'provider_pct',
+            'provider_pct_cap_ngn',
+            'exchange_rate_ngn_per_usd',
+        ] as $key) {
+            if (array_key_exists($key, $row) && $row[$key] !== true) {
+                $patch[$key] = $row[$key];
+            }
+        }
 
-        $sendFees = [
-            'SOL' => ['SOL', 0.10, 0.01],
-            'BTC' => ['BTC', 2.0, 1.0],
-            'BSC' => ['BSC', 0.10, 0.05],
-            'DOGE' => ['DOGE', 0.50, 0.15],
-            'ETH' => ['ETH', 1.0, 0.50],
-            'TRX' => ['TRX', 1.0, 0.0],
-            'USDT' => ['TRON', 1.0, 0.0],
-        ];
+        return $patch;
+    }
+
+    /**
+     * @param  array<string, mixed>  $patch
+     */
+    protected function applyCryptoDepositFees(array $patch): void
+    {
+        if ($patch === []) {
+            return;
+        }
+
+        foreach (WalletCurrency::query()->where('is_active', true)->cursor() as $wc) {
+            $this->patchRate(
+                'crypto',
+                'deposit',
+                null,
+                (string) $wc->currency,
+                (string) $wc->blockchain,
+                array_merge($patch, [
+                    'display_label' => 'Crypto Receive · '.strtoupper((string) $wc->currency).' ('.$wc->blockchain.')',
+                ])
+            );
+        }
+    }
+
+    /**
+     * @param  list<array{asset: string, network: string, fee_usd: float, provider_cost_usd: float}>  $sendFees
+     */
+    protected function applyCryptoSendFees(array $sendFees): void
+    {
+        $lookup = [];
+        foreach ($sendFees as $fee) {
+            $asset = strtoupper((string) ($fee['asset'] ?? ''));
+            $network = strtolower((string) ($fee['network'] ?? ''));
+            if ($asset === '' || $network === '') {
+                continue;
+            }
+            $lookup[$asset.'|'.$network] = $fee;
+        }
 
         foreach (WalletCurrency::query()->where('is_active', true)->cursor() as $wc) {
             $asset = strtoupper((string) $wc->currency);
-            $network = strtoupper((string) $wc->blockchain);
-            $match = $sendFees[$asset] ?? null;
-            if ($match && strtoupper($match[0]) !== $network && $asset === 'USDT') {
-                if ($network !== 'TRON' && $network !== 'ETH') {
-                    continue;
-                }
-            }
-            if (! $match) {
-                if ($asset === 'USDT' && $network === 'ETH') {
-                    $charge = 1.5;
-                    $cost = 0.5;
-                } else {
-                    continue;
-                }
-            } else {
-                $charge = $match[1];
-                $cost = $match[2];
-                if ($asset === 'USDT' && $network === 'ETH') {
-                    $charge = 1.5;
-                    $cost = 0.5;
-                }
+            $network = strtolower((string) $wc->blockchain);
+            $key = $asset.'|'.$network;
+            if (! isset($lookup[$key])) {
+                continue;
             }
 
-            $label = "{$asset} Send ({$network})";
+            $fee = $lookup[$key];
             $this->patchRate('crypto', 'withdrawal', null, $asset, $network, [
-                'display_label' => $label,
-                'fee_usd' => $charge,
-                'provider_cost_usd' => $cost,
+                'display_label' => "{$asset} Send ({$network})",
+                'fee_usd' => (float) $fee['fee_usd'],
+                'provider_cost_usd' => (float) $fee['provider_cost_usd'],
             ]);
         }
     }
 
-    protected function ensureDeclineRates(): void
+    /**
+     * @param  array<string, mixed>  $patch
+     */
+    protected function patchOrCreateVirtualCardRate(string $serviceKey, array $patch): void
     {
-        foreach ([
-            ['creation', 'decline_fee', 'Mastercard Decline Fee', 1, 0],
-            ['visa_creation', 'visa_decline_fee', 'Visa Decline Fee', 1, 0.75],
-        ] as [$baseKey, $declineKey, $label, $chargeUsd, $costUsd]) {
-            $base = PlatformRate::query()
-                ->where('category', 'virtual_card')
-                ->where('service_key', $declineKey)
-                ->first();
-            if ($base) {
-                $base->update([
-                    'display_label' => $label,
-                    'fee_usd' => $chargeUsd,
-                    'provider_cost_usd' => $costUsd,
-                ]);
+        $existing = PlatformRate::query()
+            ->where('category', 'virtual_card')
+            ->where('service_key', $serviceKey)
+            ->whereNull('sub_service_key')
+            ->whereNull('crypto_asset')
+            ->whereNull('network_key')
+            ->first();
 
-                continue;
+        if ($existing) {
+            $existing->update($patch);
+
+            return;
+        }
+
+        $m = new PlatformRate(array_merge([
+            'category' => 'virtual_card',
+            'service_key' => $serviceKey,
+            'is_active' => true,
+        ], $patch));
+        $m->slug = PlatformRate::composeSlug($m);
+        $m->save();
+    }
+
+    /**
+     * @param  array<string, string>  $links
+     */
+    protected function syncServiceProfitSettings(array $links): void
+    {
+        foreach ($links as $serviceKey => $slug) {
+            $rate = PlatformRate::query()->where('slug', $slug)->first();
+            $updates = ['linked_rate_slug' => $slug];
+            if ($rate) {
+                if ($rate->provider_cost_ngn !== null) {
+                    $updates['provider_cost_ngn'] = $rate->provider_cost_ngn;
+                }
+                if ($rate->provider_cost_usd !== null) {
+                    $updates['provider_cost_usd'] = $rate->provider_cost_usd;
+                }
+                if ($rate->provider_pct !== null) {
+                    $updates['provider_pct'] = $rate->provider_pct;
+                }
+                if ($rate->provider_pct_cap_ngn !== null) {
+                    $updates['provider_pct_cap_ngn'] = $rate->provider_pct_cap_ngn;
+                }
+                if ($rate->fee_usd !== null) {
+                    $updates['fixed_fee'] = $rate->fee_usd;
+                }
             }
 
-            $m = new PlatformRate([
-                'category' => 'virtual_card',
-                'service_key' => $declineKey,
-                'fee_usd' => $chargeUsd,
-                'provider_cost_usd' => $costUsd,
-                'display_label' => $label,
-                'is_active' => true,
-            ]);
-            $m->slug = PlatformRate::composeSlug($m);
-            $m->save();
+            ServiceProfitSetting::query()
+                ->where('service_key', $serviceKey)
+                ->update($updates);
         }
+
+        ServiceProfitSetting::query()
+            ->whereIn('service_key', ['bill_commission_airtime', 'bill_commission_betting'])
+            ->update(['margin_mode' => 'commission']);
     }
 
     /**

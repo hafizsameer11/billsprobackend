@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\NotificationHelper;
 use App\Helpers\ResponseHelper;
+use App\Http\Controllers\Concerns\VerifiesTransactionPin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
 use App\Http\Requests\VirtualCard\CreateSpendControlRequest;
@@ -13,6 +14,7 @@ use App\Http\Requests\VirtualCard\FundingEstimateRequest;
 use App\Http\Requests\VirtualCard\WithdrawCardRequest;
 use App\Models\VirtualCardProviderWebhookEvent;
 use App\Services\VirtualCard\VirtualCardService;
+use App\Services\Http\IdempotencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +26,8 @@ use OpenApi\Attributes as OA;
 )]
 class VirtualCardController extends Controller
 {
+    use VerifiesTransactionPin;
+
     protected VirtualCardService $virtualCardService;
 
     public function __construct(VirtualCardService $virtualCardService)
@@ -195,6 +199,18 @@ class VirtualCardController extends Controller
     public function create(CreateCardRequest $request): JsonResponse
     {
         try {
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.create');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
+
             $result = $this->virtualCardService->createCard($request->user()->id, $request->validated());
 
             if (! $result['success']) {
@@ -213,7 +229,10 @@ class VirtualCardController extends Controller
                 Log::warning('Virtual card create notification failed: '.$e->getMessage());
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual card created successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual card created successfully.');
+            $idempotency->store($request, $userId, 'virtual-cards.create', 200, $response->getData(true));
+
+            return $response;
         } catch (\Exception $e) {
             Log::error('Create virtual card error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -283,7 +302,19 @@ class VirtualCardController extends Controller
     public function fund(FundCardRequest $request, int $id): JsonResponse
     {
         try {
-            $result = $this->virtualCardService->fundCard($request->user()->id, $id, $request->validated());
+            $userId = $request->user()->id;
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
+
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.fund');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
+            $result = $this->virtualCardService->fundCard($userId, $id, $request->validated());
 
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400);
@@ -302,7 +333,10 @@ class VirtualCardController extends Controller
                 Log::warning('Virtual card fund notification failed: '.$e->getMessage());
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
+            $idempotency->store($request, $userId, 'virtual-cards.fund', 200, $response->getData(true));
+
+            return $response;
         } catch (\Exception $e) {
             Log::error('Fund card error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,

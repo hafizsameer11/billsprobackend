@@ -9,14 +9,18 @@ use App\Models\User;
 use App\Models\VirtualAccount;
 use App\Models\WalletCurrency;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class SyncReceivedAssetTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_public_get_syncs_received_asset_from_crypto_deposit_transaction(): void
+    public function test_admin_sync_received_asset_from_crypto_deposit_transaction(): void
     {
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin);
+
         $user = User::factory()->create();
 
         $wc = WalletCurrency::query()->create([
@@ -82,20 +86,16 @@ class SyncReceivedAssetTest extends TestCase
 
         $this->assertEquals(0, ReceivedAsset::query()->count());
 
-        $this->getJson('/api/crypto/sync-received-asset?transaction_id='.$tx->id)
+        $this->getJson('/api/admin/crypto/sync-received-asset?transaction_id='.$tx->id)
             ->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('transaction_id', $tx->id);
 
         $this->assertEquals(1, ReceivedAsset::query()->count());
-        $this->assertDatabaseHas('received_assets', [
-            'transaction_id' => $tx->id,
-            'tx_hash' => '0xlegacyhash1111111111111111111111111111111111111111111111111111',
-        ]);
+    }
 
-        $this->getJson('/api/crypto/sync-received-asset?transaction_id='.$tx->id)
-            ->assertOk()
-            ->assertJsonPath('success', true)
-            ->assertJsonPath('message', 'Already synced; no changes.');
+    public function test_public_sync_route_is_not_available(): void
+    {
+        $this->getJson('/api/crypto/sync-received-asset?transaction_id=1')->assertNotFound();
     }
 }

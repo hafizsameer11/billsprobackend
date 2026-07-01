@@ -28,6 +28,23 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        if (app()->environment('production') && ! app()->environment('testing')) {
+            if (config('app.debug')) {
+                throw new \RuntimeException('APP_DEBUG must be false in production.');
+            }
+            if (! config('palmpay.verify_webhook_signature', true)) {
+                throw new \RuntimeException('PALMPAY_VERIFY_WEBHOOK_SIGNATURE must be true in production.');
+            }
+            if (config('admin.webhook_replay_enabled')) {
+                throw new \RuntimeException('ADMIN_WEBHOOK_REPLAY_ENABLED must be false in production.');
+            }
+            foreach (['ENCRYPTION_KEY', 'TATUM_API_KEY', 'PALMPAY_APP_ID'] as $key) {
+                if (empty(env($key))) {
+                    throw new \RuntimeException("{$key} must be set in production.");
+                }
+            }
+        }
+
         // Force HTTPS URLs in production or when behind proxy
         if (config('app.env') === 'production' || env('FORCE_HTTPS', false)) {
             URL::forceScheme('https');

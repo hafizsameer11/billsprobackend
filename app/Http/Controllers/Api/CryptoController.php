@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
+use App\Http\Controllers\Concerns\VerifiesTransactionPin;
 use App\Http\Controllers\Controller;
 use App\Services\Crypto\CryptoService;
 use App\Services\Crypto\CryptoWalletService;
+use App\Services\Http\IdempotencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -17,6 +19,8 @@ use OpenApi\Attributes as OA;
 )]
 class CryptoController extends Controller
 {
+    use VerifiesTransactionPin;
+
     protected CryptoService $cryptoService;
 
     protected CryptoWalletService $cryptoWalletService;
@@ -277,7 +281,13 @@ class CryptoController extends Controller
                 'blockchain' => 'required|string',
                 'amount' => 'required|numeric|min:0.01',
                 'payment_method' => 'nullable|string|in:naira',
+                'pin' => 'required|string|size:4',
             ]);
+
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
 
             $result = $this->cryptoService->confirmBuyCrypto($request->user()->id, $data);
 
@@ -349,7 +359,13 @@ class CryptoController extends Controller
                 'currency' => 'required|string',
                 'blockchain' => 'required|string',
                 'amount' => 'required|numeric|min:0.00000001',
+                'pin' => 'required|string|size:4',
             ]);
+
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
 
             $result = $this->cryptoService->confirmSellCrypto($request->user()->id, $data);
 
@@ -420,15 +436,33 @@ class CryptoController extends Controller
                 'amount' => 'required|numeric|min:0.00000001',
                 'address' => 'required|string',
                 'network' => 'nullable|string',
+                'pin' => 'required|string|size:4',
             ]);
 
-            $result = $this->cryptoService->sendCrypto($request->user()->id, $data);
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'crypto.send');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
+
+            $result = $this->cryptoService->sendCrypto($userId, array_merge($data, [
+                'idempotency_key' => trim((string) $request->header('Idempotency-Key', '')),
+            ]));
 
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Transaction failed', 400);
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Crypto sent successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Crypto sent successfully.');
+            $idempotency->store($request, $userId, 'crypto.send', 200, $response->getData(true));
+
+            return $response;
         } catch (\Illuminate\Validation\ValidationException $e) {
             return ResponseHelper::validationError($e->errors());
         } catch (\Exception $e) {

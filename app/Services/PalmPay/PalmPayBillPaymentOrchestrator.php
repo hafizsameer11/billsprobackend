@@ -145,6 +145,47 @@ class PalmPayBillPaymentOrchestrator
                 'relationId' => (string) $userId,
             ]);
         } catch (\Throwable $e) {
+            $remoteOrder = null;
+            try {
+                $remoteOrder = $this->billApi->queryBillOrder($sceneCode, $outOrderNo);
+            } catch (\Throwable) {
+                $remoteOrder = null;
+            }
+
+            $remoteStatus = isset($remoteOrder['orderStatus']) ? (int) $remoteOrder['orderStatus'] : null;
+            if ($remoteStatus === 2 || $remoteStatus === 1) {
+                $orderNo = $remoteOrder['orderNo'] ?? null;
+                $billRow->update([
+                    'palmpay_order_no' => $orderNo,
+                    'palmpay_status' => (string) $remoteStatus,
+                    'provider_response' => $remoteOrder,
+                    'status' => $remoteStatus === 2 ? 'completed' : 'pending',
+                ]);
+                $transaction->update([
+                    'status' => $remoteStatus === 2 ? 'completed' : 'pending',
+                    'metadata' => array_merge($transaction->metadata ?? [], [
+                        'palmpay_order_no' => $orderNo,
+                        'palmpay_order_status' => $remoteStatus,
+                        'create_api_error' => $e->getMessage(),
+                    ]),
+                ]);
+
+                if ($remoteStatus === 2) {
+                    $transaction->update(['completed_at' => now()]);
+                    $billRow->update(['completed_at' => now()]);
+                    $this->commissionMetadata->applyOnCompleted($transaction->fresh());
+                }
+
+                return [
+                    'transactionId' => $transaction->id,
+                    'billOrderId' => $billRow->id,
+                    'outOrderNo' => $outOrderNo,
+                    'orderNo' => $orderNo,
+                    'orderStatus' => $remoteStatus,
+                    'status' => $remoteStatus === 2 ? 'completed' : 'pending',
+                ];
+            }
+
             $this->refundWallet($wallet->id, $amount);
             $transaction->update(['status' => 'failed', 'metadata' => array_merge($transaction->metadata ?? [], ['error' => $e->getMessage()])]);
             $billRow->update(['status' => 'failed', 'error_message' => $e->getMessage()]);

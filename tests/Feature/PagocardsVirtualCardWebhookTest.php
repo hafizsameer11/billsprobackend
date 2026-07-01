@@ -16,6 +16,11 @@ class PagocardsVirtualCardWebhookTest extends TestCase
 {
     use RefreshDatabase;
 
+    private function webhookUrl(): string
+    {
+        return '/api/webhooks/pagocards/virtual-cards/test-webhook-token';
+    }
+
     private function makeVirtualCardForUser(User $user, string $providerCardId): VirtualCard
     {
         return VirtualCard::query()->create([
@@ -54,8 +59,8 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             'merchantCurrency' => 'USD',
         ];
 
-        $this->postJson('/api/webhooks/pagocards/virtual-cards', $payload)->assertOk();
-        $this->postJson('/api/webhooks/pagocards/virtual-cards', $payload)->assertOk()
+        $this->postJson($this->webhookUrl(), $payload)->assertOk();
+        $this->postJson($this->webhookUrl(), $payload)->assertOk()
             ->assertJsonPath('duplicate', true);
 
         $this->assertEquals(1, VirtualCardProviderWebhookEvent::query()->count());
@@ -81,7 +86,7 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             'maskedPan' => '533812******1234',
         ];
 
-        $this->postJson('/api/webhooks/pagocards/virtual-cards', $payload)->assertOk();
+        $this->postJson($this->webhookUrl(), $payload)->assertOk();
 
         $this->assertDatabaseHas('virtual_card_provider_webhook_events', [
             'external_event_id' => 'evt-3ds-1',
@@ -110,7 +115,7 @@ class PagocardsVirtualCardWebhookTest extends TestCase
         $user = User::factory()->create();
         $this->makeVirtualCardForUser($user, 'crd-pending-list');
 
-        $this->postJson('/api/webhooks/pagocards/virtual-cards', [
+        $this->postJson($this->webhookUrl(), [
             'eventId' => 'evt-pending-list-1',
             'eventName' => 'cardAuthentication.created',
             'cardId' => 'crd-pending-list',
@@ -126,7 +131,7 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             ->assertJsonPath('data.0.event_target_id', '3ds-list-1');
     }
 
-    public function test_unknown_card_stores_event_without_user(): void
+    public function test_unknown_card_webhook_is_ignored(): void
     {
         Queue::fake();
 
@@ -137,13 +142,11 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             'eventTargetId' => '3ds-x',
         ];
 
-        $this->postJson('/api/webhooks/pagocards/virtual-cards', $payload)->assertOk();
+        $this->postJson($this->webhookUrl(), $payload)
+            ->assertOk()
+            ->assertJsonPath('message', 'Ignored: unknown card');
 
-        $row = VirtualCardProviderWebhookEvent::query()->where('external_event_id', 'evt-orphan-1')->first();
-        $this->assertNotNull($row);
-        $this->assertNull($row->user_id);
-        $this->assertNull($row->virtual_card_id);
-
+        $this->assertEquals(0, VirtualCardProviderWebhookEvent::query()->count());
         Queue::assertNothingPushed();
     }
 }

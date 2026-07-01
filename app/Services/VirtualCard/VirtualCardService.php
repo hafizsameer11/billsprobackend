@@ -171,8 +171,22 @@ class VirtualCardService
         ];
 
         try {
+            $this->debitCardCreationFee($userId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd);
+        } catch (\RuntimeException $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'status' => 400,
+            ];
+        }
+
+        try {
             $response = $this->mastercardApiClient->createMerchantMasterCard($payload);
         } catch (MastercardApiException $exception) {
+            $this->refundCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, [
+                'charge_ngn' => $feeNgn,
+                'charge_usd' => $feeUsd,
+            ]);
             ApplicationLog::warning('virtual_card', 'virtual_card.create.provider_exception', [
                 'user_id' => $userId,
                 'http_status' => $exception->getHttpStatus(),
@@ -217,23 +231,6 @@ class VirtualCardService
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
                 $cardColor = (string) ($data['card_color'] ?? 'green');
                 $programBilling = $this->pagocardsProgramBillingColumns('mastercard');
-
-                if ($paymentWalletType === 'naira_wallet') {
-                    $wallet = FiatWallet::where('user_id', $userId)
-                        ->where('currency', $fiatCurrency)
-                        ->where('country_code', 'NG')
-                        ->lockForUpdate()
-                        ->first();
-                    if (! $wallet || (float) $wallet->balance < $feeNgn) {
-                        throw new \RuntimeException('Insufficient Naira wallet balance for card creation fee.');
-                    }
-                    $wallet->decrement('balance', $feeNgn);
-                } else {
-                    $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $feeUsd);
-                    if (! $deduct['success']) {
-                        throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct card creation fee from crypto wallet.');
-                    }
-                }
 
                 $card = VirtualCard::updateOrCreate(
                     ['provider_card_id' => $providerCardId, 'user_id' => $userId],
@@ -406,8 +403,22 @@ class VirtualCardService
         ]);
 
         try {
+            $this->debitCardCreationFee($userId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd);
+        } catch (\RuntimeException $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'status' => 400,
+            ];
+        }
+
+        try {
             $response = $this->visaCardApiClient->createCard($payload);
         } catch (MastercardApiException $exception) {
+            $this->refundCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, [
+                'charge_ngn' => $feeNgn,
+                'charge_usd' => $feeUsd,
+            ]);
             ApplicationLog::warning('virtual_card', 'virtual_card.create_visa.provider_exception', [
                 'user_id' => $userId,
                 'http_status' => $exception->getHttpStatus(),
@@ -452,23 +463,6 @@ class VirtualCardService
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
                 $cardColor = (string) ($data['card_color'] ?? 'green');
                 $programBilling = $this->pagocardsProgramBillingColumns('visa');
-
-                if ($paymentWalletType === 'naira_wallet') {
-                    $wallet = FiatWallet::where('user_id', $userId)
-                        ->where('currency', $fiatCurrency)
-                        ->where('country_code', 'NG')
-                        ->lockForUpdate()
-                        ->first();
-                    if (! $wallet || (float) $wallet->balance < $feeNgn) {
-                        throw new \RuntimeException('Insufficient Naira wallet balance for card creation fee.');
-                    }
-                    $wallet->decrement('balance', $feeNgn);
-                } else {
-                    $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $feeUsd);
-                    if (! $deduct['success']) {
-                        throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct card creation fee from crypto wallet.');
-                    }
-                }
 
                 $card = VirtualCard::updateOrCreate(
                     ['provider_card_id' => $providerCardId, 'user_id' => $userId],
@@ -734,12 +728,16 @@ class VirtualCardService
     protected function resolveFundFlatProcessingFeeNgn(?PlatformRate $r, float $ngnPerUsd): float
     {
         $ngnPerUsd = max(0.0001, $ngnPerUsd);
+        $total = 0.0;
         if ($r) {
             if ($r->fee_usd !== null) {
-                return round(max(0.0, (float) $r->fee_usd) * $ngnPerUsd, 2);
+                $total += max(0.0, (float) $r->fee_usd) * $ngnPerUsd;
             }
             if ((float) $r->fixed_fee_ngn > 0.0) {
-                return round((float) $r->fixed_fee_ngn, 2);
+                $total += (float) $r->fixed_fee_ngn;
+            }
+            if ($total > 0.0) {
+                return round($total, 2);
             }
         }
 
@@ -912,10 +910,21 @@ class VirtualCardService
         ];
 
         try {
+            $this->debitCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, $charges);
+        } catch (\RuntimeException $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'status' => 400,
+            ];
+        }
+
+        try {
             $response = $this->isVisaCard($card)
                 ? $this->visaCardApiClient->fundCard($payload)
                 : $this->mastercardApiClient->fundMerchantMasterCard($payload);
         } catch (MastercardApiException $exception) {
+            $this->refundCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, $charges);
             $context = $exception->getContext() ?? [];
             if (($context['response'] ?? null) === [] || $exception->getHttpStatus() === 404) {
                 $message = 'Provider funding endpoint is not available. Check MASTERCARD_API_FUND_PATH and reseller API contract.';
@@ -948,25 +957,6 @@ class VirtualCardService
 
         try {
             $result = DB::transaction(function () use ($userId, $card, $payload, $response, $paymentWalletType, $fiatCurrency, $charges, $principalUsd) {
-                if ($paymentWalletType === 'naira_wallet') {
-                    $wallet = FiatWallet::where('user_id', $userId)
-                        ->where('currency', $fiatCurrency)
-                        ->where('country_code', 'NG')
-                        ->lockForUpdate()
-                        ->first();
-                    $chargeNgn = (float) ($charges['charge_ngn'] ?? 0);
-                    if (! $wallet || (float) $wallet->balance + 0.0000001 < $chargeNgn) {
-                        throw new \RuntimeException('Insufficient Naira wallet balance.');
-                    }
-                    $wallet->decrement('balance', $chargeNgn);
-                } else {
-                    $chargeUsd = (float) ($charges['charge_usd'] ?? 0);
-                    $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $chargeUsd);
-                    if (! $deduct['success']) {
-                        throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct from crypto wallet.');
-                    }
-                }
-
                 $freshCard = VirtualCard::where('id', $card->id)
                     ->where('user_id', $userId)
                     ->lockForUpdate()
@@ -1066,6 +1056,7 @@ class VirtualCardService
 
             return $result;
         } catch (\RuntimeException $e) {
+            $this->refundCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, $charges);
             Log::critical('Virtual card funded at provider but wallet bookkeeping failed', [
                 'user_id' => $userId,
                 'card_id' => $card->id,
@@ -2357,5 +2348,78 @@ class VirtualCardService
         }
 
         return (string) $user->email;
+    }
+
+    /**
+     * @param  array<string, mixed>  $charges
+     */
+    protected function debitCardWalletCharge(
+        int $userId,
+        string $paymentWalletType,
+        string $fiatCurrency,
+        array $charges
+    ): void {
+        DB::transaction(function () use ($userId, $paymentWalletType, $fiatCurrency, $charges) {
+            if ($paymentWalletType === 'naira_wallet') {
+                $chargeNgn = (float) ($charges['charge_ngn'] ?? 0);
+                $wallet = FiatWallet::where('user_id', $userId)
+                    ->where('currency', $fiatCurrency)
+                    ->where('country_code', 'NG')
+                    ->lockForUpdate()
+                    ->first();
+                if (! $wallet || (float) $wallet->balance + 0.0000001 < $chargeNgn) {
+                    throw new \RuntimeException('Insufficient Naira wallet balance.');
+                }
+                $wallet->decrement('balance', $chargeNgn);
+            } else {
+                $chargeUsd = (float) ($charges['charge_usd'] ?? 0);
+                $deduct = $this->cryptoWalletService->deductUsdEquivalent($userId, $chargeUsd);
+                if (! $deduct['success']) {
+                    throw new \RuntimeException($deduct['message'] ?? 'Unable to deduct from crypto wallet.');
+                }
+            }
+        });
+    }
+
+    protected function debitCardCreationFee(
+        int $userId,
+        string $paymentWalletType,
+        string $fiatCurrency,
+        float $feeNgn,
+        float $feeUsd
+    ): void {
+        $this->debitCardWalletCharge($userId, $paymentWalletType, $fiatCurrency, [
+            'charge_ngn' => $feeNgn,
+            'charge_usd' => $feeUsd,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $charges
+     */
+    protected function refundCardWalletCharge(
+        int $userId,
+        string $paymentWalletType,
+        string $fiatCurrency,
+        array $charges
+    ): void {
+        DB::transaction(function () use ($userId, $paymentWalletType, $fiatCurrency, $charges) {
+            if ($paymentWalletType === 'naira_wallet') {
+                $chargeNgn = (float) ($charges['charge_ngn'] ?? 0);
+                $wallet = FiatWallet::where('user_id', $userId)
+                    ->where('currency', $fiatCurrency)
+                    ->where('country_code', 'NG')
+                    ->lockForUpdate()
+                    ->first();
+                if ($wallet && $chargeNgn > 0) {
+                    $wallet->increment('balance', $chargeNgn);
+                }
+            } else {
+                $chargeUsd = (float) ($charges['charge_usd'] ?? 0);
+                if ($chargeUsd > 0) {
+                    $this->cryptoWalletService->creditUsdEquivalent($userId, $chargeUsd);
+                }
+            }
+        });
     }
 }

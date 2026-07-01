@@ -48,27 +48,42 @@ class PagocardsVirtualCardWebhookService
             }
 
             $eventName = (string) ($payload['eventName'] ?? '');
+            if ($eventName === '' || ! in_array($eventName, [self::EVENT_3DS_CREATED, self::EVENT_TOKENIZATION], true)) {
+                $this->markRaw($rawId, 'Unknown eventName');
+
+                return ['success' => true, 'message' => 'Ignored: unknown eventName'];
+            }
+
             $pagocardsCardId = (string) ($payload['cardId'] ?? '');
+            if ($pagocardsCardId === '') {
+                $this->markRaw($rawId, 'Missing cardId');
+
+                return ['success' => true, 'message' => 'Ignored: missing cardId'];
+            }
+
+            $card = VirtualCard::query()->where('provider_card_id', $pagocardsCardId)->first();
+            if (! $card) {
+                $this->markRaw($rawId, 'Unknown cardId');
+
+                return ['success' => true, 'message' => 'Ignored: unknown card'];
+            }
+
             $pagocardsUserId = isset($payload['userId']) ? (string) $payload['userId'] : null;
             $eventTargetId = isset($payload['eventTargetId']) ? (string) $payload['eventTargetId'] : null;
 
-            $card = $pagocardsCardId !== ''
-                ? VirtualCard::query()->where('provider_card_id', $pagocardsCardId)->first()
-                : null;
-
             $event = VirtualCardProviderWebhookEvent::query()->create([
                 'external_event_id' => $externalEventId,
-                'event_name' => $eventName !== '' ? $eventName : 'unknown',
+                'event_name' => $eventName,
                 'event_target_id' => $eventTargetId,
                 'pagocards_card_id' => $pagocardsCardId,
                 'pagocards_user_id' => $pagocardsUserId,
-                'virtual_card_id' => $card?->id,
-                'user_id' => $card?->user_id,
+                'virtual_card_id' => $card->id,
+                'user_id' => $card->user_id,
                 'status' => VirtualCardProviderWebhookEvent::STATUS_PENDING,
                 'payload' => $payload,
             ]);
 
-            if ($card && $card->user_id) {
+            if ($card->user_id) {
                 $user = User::query()->find($card->user_id);
                 if ($user) {
                     $this->notifyUser($user, $eventName, $payload, $card->id);

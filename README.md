@@ -64,3 +64,14 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## Production queue workers
+
+Webhook processing (Tatum deposits, push notifications, rate sync) uses `QUEUE_CONNECTION=database` by default. In production you must run one or more queue workers or jobs will backlog:
+
+```bash
+php artisan queue:work --tries=3 --timeout=120
+```
+
+Run multiple workers under systemd, Supervisor, or your container orchestrator. `ProcessTatumWebhookJob` uses `ShouldBeUnique` per webhook row to avoid duplicate concurrent processing.
+

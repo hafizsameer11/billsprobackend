@@ -11,6 +11,7 @@ use App\Services\PalmPay\PalmPayPayoutService;
 use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use App\Support\PalmPayConfig;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -324,61 +325,64 @@ class WithdrawalService
         $amountCents = (int) round($amount * 100);
         $payeePhone = $this->formatPayeePhone($phoneNumber ?: $user->phone_number);
 
-        try {
-            $resp = $this->palmPayPayout->initiatePayout([
-                'orderId' => $palmMerchantOrderId,
-                'title' => 'Withdrawal',
-                'description' => "Withdrawal to {$normalizedAccount}",
-                'payeeName' => trim($accountName),
-                'payeeBankCode' => trim($bankCode),
-                'payeeBankAccNo' => $normalizedAccount,
-                'payeePhoneNo' => $payeePhone,
-                'currency' => 'NGN',
-                'amount' => $amountCents,
-                'notifyUrl' => $webhookBase,
-                'remark' => 'Withdrawal user '.$userId.' tx '.$transactionId,
-            ]);
-        } catch (\Throwable $e) {
-            $transaction->update([
-                'status' => 'failed',
-                'metadata' => array_merge($transaction->metadata ?? [], [
-                    'error' => $e->getMessage(),
-                ]),
-            ]);
-            throw $e;
-        }
+        return Cache::lock('withdrawal:user:'.$userId, 30)->block(5, function () use (
+            $userId,
+            $user,
+            $totalAmount,
+            $transaction,
+            $amountCents,
+            $payeePhone,
+            $palmMerchantOrderId,
+            $webhookBase,
+            $transactionId,
+            $normalizedAccount,
+            $accountName,
+            $bankCode,
+            $payeeBankLabel,
+            $amount,
+            $fee
+        ) {
+            $this->debitFiatWalletForWithdrawal($userId, $totalAmount);
 
-        $orderStatus = isset($resp['orderStatus']) ? (int) $resp['orderStatus'] : 0;
-        $orderNo = isset($resp['orderNo']) ? (string) $resp['orderNo'] : '';
-
-        if ($orderStatus === 3 || $orderStatus === 4) {
-            $transaction->update([
-                'status' => 'failed',
-                'metadata' => array_merge($transaction->metadata ?? [], [
-                    'palmpay_response' => $resp,
-                ]),
-            ]);
-
-            throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
-        }
-
-        return DB::transaction(function () use ($userId, $totalAmount, $transaction, $resp, $orderStatus, $orderNo, $bankCode, $payeeBankLabel, $normalizedAccount, $accountName, $amount, $fee) {
-            $fiatWallet = FiatWallet::where('user_id', $userId)
-                ->where('currency', 'NGN')
-                ->where('country_code', 'NG')
-                ->lockForUpdate()
-                ->first();
-
-            if (! $fiatWallet) {
-                throw new \Exception('Fiat wallet not found');
+            try {
+                $resp = $this->palmPayPayout->initiatePayout([
+                    'orderId' => $palmMerchantOrderId,
+                    'title' => 'Withdrawal',
+                    'description' => "Withdrawal to {$normalizedAccount}",
+                    'payeeName' => trim($accountName),
+                    'payeeBankCode' => trim($bankCode),
+                    'payeeBankAccNo' => $normalizedAccount,
+                    'payeePhoneNo' => $payeePhone,
+                    'currency' => 'NGN',
+                    'amount' => $amountCents,
+                    'notifyUrl' => $webhookBase,
+                    'remark' => 'Withdrawal user '.$userId.' tx '.$transactionId,
+                ]);
+            } catch (\Throwable $e) {
+                $this->refundFiatWalletWithdrawal($userId, $totalAmount);
+                $transaction->update([
+                    'status' => 'failed',
+                    'metadata' => array_merge($transaction->metadata ?? [], [
+                        'error' => $e->getMessage(),
+                    ]),
+                ]);
+                throw $e;
             }
 
-            $availableBalance = (float) $fiatWallet->balance - (float) $fiatWallet->locked_balance;
-            if ($availableBalance < $totalAmount) {
-                throw new \Exception('Insufficient balance');
-            }
+            $orderStatus = isset($resp['orderStatus']) ? (int) $resp['orderStatus'] : 0;
+            $orderNo = isset($resp['orderNo']) ? (string) $resp['orderNo'] : '';
 
-            $fiatWallet->decrement('balance', $totalAmount);
+            if ($orderStatus === 3 || $orderStatus === 4) {
+                $this->refundFiatWalletWithdrawal($userId, $totalAmount);
+                $transaction->update([
+                    'status' => 'failed',
+                    'metadata' => array_merge($transaction->metadata ?? [], [
+                        'palmpay_response' => $resp,
+                    ]),
+                ]);
+
+                throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
+            }
 
             $meta = array_merge($transaction->metadata ?? [], [
                 'palmpay_order_no' => $orderNo,
@@ -394,7 +398,6 @@ class WithdrawalService
                 'metadata' => $meta,
             ]);
 
-            $user = User::find($userId);
             if ($user) {
                 $statusText = $orderStatus === 2 ? 'successful' : 'submitted';
                 NotificationHelper::createTransactionNotification(
@@ -616,63 +619,64 @@ class WithdrawalService
         $amountCents = (int) round($amount * 100);
         $payeePhone = $this->formatPayeePhone($user->phone_number);
 
-        try {
-            $resp = $this->palmPayPayout->initiatePayout([
-                'orderId' => $palmMerchantOrderId,
-                'title' => 'Withdrawal',
-                'description' => "Withdrawal to {$bankAccount->account_number}",
-                'payeeName' => $bankAccount->account_name,
-                'payeeBankCode' => $bankCode,
-                'payeeBankAccNo' => $bankAccount->account_number,
-                'payeePhoneNo' => $payeePhone,
-                'currency' => 'NGN',
-                'amount' => $amountCents,
-                'notifyUrl' => $webhookBase,
-                'remark' => 'Withdrawal user '.$userId.' tx '.$transactionId,
-            ]);
-        } catch (\Throwable $e) {
-            $transaction->update([
-                'status' => 'failed',
-                'metadata' => array_merge($transaction->metadata ?? [], [
-                    'error' => $e->getMessage(),
-                ]),
-            ]);
-            Log::error('PalmPay payout failed', ['user_id' => $userId, 'e' => $e->getMessage()]);
+        return Cache::lock('withdrawal:user:'.$userId, 30)->block(5, function () use (
+            $userId,
+            $user,
+            $totalAmount,
+            $transaction,
+            $amountCents,
+            $payeePhone,
+            $palmMerchantOrderId,
+            $webhookBase,
+            $transactionId,
+            $bankAccount,
+            $bankCode,
+            $amount,
+            $fee
+        ) {
+            $this->debitFiatWalletForWithdrawal($userId, $totalAmount);
 
-            throw $e;
-        }
+            try {
+                $resp = $this->palmPayPayout->initiatePayout([
+                    'orderId' => $palmMerchantOrderId,
+                    'title' => 'Withdrawal',
+                    'description' => "Withdrawal to {$bankAccount->account_number}",
+                    'payeeName' => $bankAccount->account_name,
+                    'payeeBankCode' => $bankCode,
+                    'payeeBankAccNo' => $bankAccount->account_number,
+                    'payeePhoneNo' => $payeePhone,
+                    'currency' => 'NGN',
+                    'amount' => $amountCents,
+                    'notifyUrl' => $webhookBase,
+                    'remark' => 'Withdrawal user '.$userId.' tx '.$transactionId,
+                ]);
+            } catch (\Throwable $e) {
+                $this->refundFiatWalletWithdrawal($userId, $totalAmount);
+                $transaction->update([
+                    'status' => 'failed',
+                    'metadata' => array_merge($transaction->metadata ?? [], [
+                        'error' => $e->getMessage(),
+                    ]),
+                ]);
+                Log::error('PalmPay payout failed', ['user_id' => $userId, 'e' => $e->getMessage()]);
 
-        $orderStatus = isset($resp['orderStatus']) ? (int) $resp['orderStatus'] : 0;
-        $orderNo = isset($resp['orderNo']) ? (string) $resp['orderNo'] : '';
-
-        if ($orderStatus === 3 || $orderStatus === 4) {
-            $transaction->update([
-                'status' => 'failed',
-                'metadata' => array_merge($transaction->metadata ?? [], [
-                    'palmpay_response' => $resp,
-                ]),
-            ]);
-
-            throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
-        }
-
-        return DB::transaction(function () use ($userId, $totalAmount, $transaction, $resp, $orderStatus, $orderNo, $bankAccount, $amount, $fee) {
-            $fiatWallet = FiatWallet::where('user_id', $userId)
-                ->where('currency', 'NGN')
-                ->where('country_code', 'NG')
-                ->lockForUpdate()
-                ->first();
-
-            if (! $fiatWallet) {
-                throw new \Exception('Fiat wallet not found');
+                throw $e;
             }
 
-            $availableBalance = (float) $fiatWallet->balance - (float) $fiatWallet->locked_balance;
-            if ($availableBalance < $totalAmount) {
-                throw new \Exception('Insufficient balance');
-            }
+            $orderStatus = isset($resp['orderStatus']) ? (int) $resp['orderStatus'] : 0;
+            $orderNo = isset($resp['orderNo']) ? (string) $resp['orderNo'] : '';
 
-            $fiatWallet->decrement('balance', $totalAmount);
+            if ($orderStatus === 3 || $orderStatus === 4) {
+                $this->refundFiatWalletWithdrawal($userId, $totalAmount);
+                $transaction->update([
+                    'status' => 'failed',
+                    'metadata' => array_merge($transaction->metadata ?? [], [
+                        'palmpay_response' => $resp,
+                    ]),
+                ]);
+
+                throw new \Exception($resp['message'] ?? $resp['errorMsg'] ?? 'PalmPay rejected the payout');
+            }
 
             $meta = array_merge($transaction->metadata ?? [], [
                 'palmpay_order_no' => $orderNo,
@@ -694,7 +698,6 @@ class WithdrawalService
                 'order_status' => $orderStatus,
             ]);
 
-            $user = User::find($userId);
             if ($user) {
                 $statusText = $orderStatus === 2 ? 'successful' : 'submitted';
                 NotificationHelper::createTransactionNotification(
@@ -728,6 +731,43 @@ class WithdrawalService
                     'sessionId' => $resp['sessionId'] ?? null,
                 ],
             ];
+        });
+    }
+
+    private function debitFiatWalletForWithdrawal(int $userId, float $totalAmount): void
+    {
+        DB::transaction(function () use ($userId, $totalAmount) {
+            $fiatWallet = FiatWallet::where('user_id', $userId)
+                ->where('currency', 'NGN')
+                ->where('country_code', 'NG')
+                ->lockForUpdate()
+                ->first();
+
+            if (! $fiatWallet) {
+                throw new \Exception('Fiat wallet not found');
+            }
+
+            $availableBalance = (float) $fiatWallet->balance - (float) $fiatWallet->locked_balance;
+            if ($availableBalance < $totalAmount) {
+                throw new \Exception('Insufficient balance');
+            }
+
+            $fiatWallet->decrement('balance', $totalAmount);
+        });
+    }
+
+    private function refundFiatWalletWithdrawal(int $userId, float $totalAmount): void
+    {
+        DB::transaction(function () use ($userId, $totalAmount) {
+            $fiatWallet = FiatWallet::where('user_id', $userId)
+                ->where('currency', 'NGN')
+                ->where('country_code', 'NG')
+                ->lockForUpdate()
+                ->first();
+
+            if ($fiatWallet) {
+                $fiatWallet->increment('balance', $totalAmount);
+            }
         });
     }
 

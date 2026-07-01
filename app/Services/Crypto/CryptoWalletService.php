@@ -209,4 +209,33 @@ class CryptoWalletService
             return ['success' => true, 'deducted_usd' => $amountUsd];
         });
     }
+
+    public function creditUsdEquivalent(int $userId, float $amountUsd): void
+    {
+        if ($amountUsd <= 0) {
+            return;
+        }
+
+        DB::transaction(function () use ($userId, $amountUsd) {
+            $account = VirtualAccount::where('user_id', $userId)
+                ->where('active', true)
+                ->with('walletCurrency')
+                ->lockForUpdate()
+                ->get()
+                ->first(fn (VirtualAccount $va) => (float) ($va->walletCurrency->rate ?? 0) > 0);
+
+            if (! $account) {
+                return;
+            }
+
+            $rate = (float) ($account->walletCurrency->rate ?? 0);
+            if ($rate <= 0) {
+                return;
+            }
+
+            $creditCrypto = $amountUsd / $rate;
+            $account->increment('available_balance', $creditCrypto);
+            $account->increment('account_balance', $creditCrypto);
+        });
+    }
 }

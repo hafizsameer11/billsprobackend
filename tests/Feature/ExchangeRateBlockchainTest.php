@@ -85,4 +85,56 @@ class ExchangeRateBlockchainTest extends TestCase
         $this->assertTrue($sell['success']);
         $this->assertEquals(2.5, $sell['data']['rate']);
     }
+
+    public function test_buy_and_sell_apply_admin_fx_markup_from_platform_rates(): void
+    {
+        config(['crypto.ngn_per_usd' => 1000]);
+
+        $wc = WalletCurrency::query()->create([
+            'blockchain' => 'ethereum',
+            'currency' => 'FXTEST',
+            'symbol' => 'FX',
+            'name' => 'FX Test',
+            'rate' => 1.0,
+            'decimals' => 6,
+            'is_token' => true,
+            'is_active' => true,
+        ]);
+
+        CryptoExchangeRate::query()->create([
+            'wallet_currency_id' => $wc->id,
+            'rate_buy' => 1.0,
+            'rate_sell' => 1.0,
+        ]);
+
+        \App\Models\PlatformRate::query()->create([
+            'category' => 'crypto',
+            'service_key' => 'buy',
+            'fixed_fee_ngn' => 80,
+            'is_active' => true,
+            'slug' => 'crypto|buy|||',
+        ]);
+
+        \App\Models\PlatformRate::query()->create([
+            'category' => 'crypto',
+            'service_key' => 'sell',
+            'fixed_fee_ngn' => 80,
+            'is_active' => true,
+            'slug' => 'crypto|sell|||',
+        ]);
+
+        $crypto = app(CryptoService::class);
+
+        $buy = $crypto->getExchangeRate('NGN', 'FXTEST', 10_800, 'ethereum');
+        $this->assertTrue($buy['success']);
+        $this->assertEquals(80.0, $buy['data']['fx_markup_ngn']);
+        $this->assertEquals(1080.0, $buy['data']['ngn_per_usd_effective']);
+        $this->assertEqualsWithDelta(10.0, $buy['data']['crypto_amount'], 0.0001);
+
+        $sell = $crypto->getExchangeRate('FXTEST', 'NGN', 10.0, 'ethereum');
+        $this->assertTrue($sell['success']);
+        $this->assertEquals(80.0, $sell['data']['fx_markup_ngn']);
+        $this->assertEquals(920.0, $sell['data']['ngn_per_usd_effective']);
+        $this->assertEqualsWithDelta(9200.0, $sell['data']['fiat_amount'], 0.01);
+    }
 }

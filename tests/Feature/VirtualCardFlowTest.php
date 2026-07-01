@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\Auth\AuthService;
 use App\Services\VirtualCard\VirtualCardService;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
@@ -16,7 +17,7 @@ class VirtualCardFlowTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_create_card_requires_firstname_and_lastname(): void
+    public function test_create_card_requires_payment_wallet_and_pin(): void
     {
         $user = User::factory()->make(['id' => 1]);
         Sanctum::actingAs($user);
@@ -26,13 +27,17 @@ class VirtualCardFlowTest extends TestCase
         ]);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['firstname', 'lastname', 'payment_wallet_type']);
+            ->assertJsonValidationErrors(['payment_wallet_type', 'pin']);
     }
 
     public function test_fund_card_maps_provider_error_response(): void
     {
         $user = User::factory()->make(['id' => 1]);
         Sanctum::actingAs($user);
+
+        $auth = Mockery::mock(AuthService::class);
+        $auth->shouldReceive('verifyPin')->andReturn(true);
+        $this->app->instance(AuthService::class, $auth);
 
         $service = Mockery::mock(VirtualCardService::class);
         $service->shouldReceive('fundCard')
@@ -46,6 +51,8 @@ class VirtualCardFlowTest extends TestCase
 
         $response = $this->postJson('/api/virtual-cards/1/fund', [
             'amount' => 50,
+            'payment_wallet_type' => 'naira_wallet',
+            'pin' => '1234',
         ]);
 
         $response->assertStatus(404)

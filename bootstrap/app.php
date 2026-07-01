@@ -14,8 +14,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Trust all proxies (for load balancers/SSL termination)
-        $middleware->trustProxies(at: '*');
+        $trusted = env('TRUSTED_PROXIES', '*');
+        $middleware->trustProxies(at: $trusted === '*' ? '*' : array_filter(array_map('trim', explode(',', $trusted))));
         $middleware->alias([
             'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
             'account.active' => \App\Http\Middleware\EnsureAccountActive::class,

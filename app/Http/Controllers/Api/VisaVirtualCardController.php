@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\NotificationHelper;
 use App\Helpers\ResponseHelper;
+use App\Http\Controllers\Concerns\VerifiesTransactionPin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
 use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Http\Requests\VirtualCard\FundingEstimateRequest;
+use App\Services\Http\IdempotencyService;
 use App\Services\VirtualCard\VisaVirtualCardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,6 +22,8 @@ use OpenApi\Attributes as OA;
 )]
 class VisaVirtualCardController extends Controller
 {
+    use VerifiesTransactionPin;
+
     public function __construct(
         protected VisaVirtualCardService $visaVirtualCardService,
     ) {}
@@ -86,7 +90,19 @@ class VisaVirtualCardController extends Controller
     public function create(CreateCardRequest $request): JsonResponse
     {
         try {
-            $result = $this->visaVirtualCardService->createCard($request->user()->id, $request->validated());
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.visa.create');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
+
+            $result = $this->visaVirtualCardService->createCard($userId, $request->validated());
 
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400);
@@ -104,7 +120,10 @@ class VisaVirtualCardController extends Controller
                 Log::warning('Visa virtual card create notification failed: '.$e->getMessage());
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual Visa card created successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Virtual Visa card created successfully.');
+            $idempotency->store($request, $userId, 'virtual-cards.visa.create', 200, $response->getData(true));
+
+            return $response;
         } catch (\Exception $e) {
             Log::error('Create Visa virtual card error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -141,11 +160,24 @@ class VisaVirtualCardController extends Controller
     public function fund(FundCardRequest $request, int $id): JsonResponse
     {
         try {
-            if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
+            $userId = $request->user()->id;
+
+            if (! $this->visaVirtualCardService->userOwnsVisaCard($userId, $id)) {
                 return ResponseHelper::notFound('Visa virtual card not found. Use the Mastercard fund endpoint for Mastercard cards.');
             }
 
-            $result = $this->visaVirtualCardService->fundCard($request->user()->id, $id, $request->validated());
+            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
+            if ($pinCheck instanceof JsonResponse) {
+                return $pinCheck;
+            }
+
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.visa.fund');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
+            $result = $this->visaVirtualCardService->fundCard($userId, $id, $request->validated());
 
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400);
@@ -164,7 +196,10 @@ class VisaVirtualCardController extends Controller
                 Log::warning('Visa virtual card fund notification failed: '.$e->getMessage());
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Card funded successfully.');
+            $idempotency->store($request, $userId, 'virtual-cards.visa.fund', 200, $response->getData(true));
+
+            return $response;
         } catch (\Exception $e) {
             Log::error('Fund Visa card error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,

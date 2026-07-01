@@ -19,6 +19,7 @@ class FundCardRequest extends FormRequest
             'amount' => 'required|numeric|min:0.01',
             'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
             'payment_wallet_currency' => 'nullable|string|max:10',
+            'pin' => 'required|string|size:4',
         ];
     }
 

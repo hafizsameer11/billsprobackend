@@ -30,8 +30,6 @@ class User extends Authenticatable
         'phone_verified',
         'kyc_completed',
         'country_code',
-        'is_admin',
-        'account_status',
         'suspended_at',
         'suspension_reason',
         'internal_notes',
@@ -46,6 +44,7 @@ class User extends Authenticatable
         'password',
         'pin',
         'remember_token',
+        'is_admin',
         'internal_notes',
     ];
 

@@ -41,8 +41,8 @@ class PlatformRateMarginEstimator
         if ($r->percentage_fee !== null && $amountUsd > 0) {
             $chargeUsd += round($amountUsd * (float) $r->percentage_fee / 100, 8);
         }
-        if ($chargeUsd > 0 && $rate > 0 && $chargeNgn <= 0) {
-            $chargeNgn = round($chargeUsd * $rate, 2);
+        if ($chargeUsd > 0 && $rate > 0) {
+            $chargeNgn += round($chargeUsd * $rate, 2);
         }
 
         $costNgn = (float) ($r->provider_cost_ngn ?? 0);

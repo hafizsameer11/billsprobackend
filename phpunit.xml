@@ -32,5 +32,9 @@
         <env name="SESSION_DRIVER" value="array"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="TATUM_USE_MOCK" value="false"/>
+        <env name="TATUM_VERIFY_WEBHOOK_HMAC" value="false"/>
+        <env name="PAGOCARDS_WEBHOOK_TOKEN" value="test-webhook-token"/>
+        <env name="TATUM_API_KEY" value="test-tatum-key"/>
+        <env name="PALMPAY_APP_ID" value="test-palmpay-app"/>
     </php>
 </phpunit>

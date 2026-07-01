@@ -19,6 +19,7 @@ class Transaction extends Model
         'fee',
         'total_amount',
         'reference',
+        'deposit_tx_hash',
         'description',
         'metadata',
         'bank_name',

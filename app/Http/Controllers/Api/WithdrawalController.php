@@ -8,6 +8,7 @@ use App\Http\Requests\Withdrawal\AddBankAccountRequest;
 use App\Http\Requests\Withdrawal\UpdateBankAccountRequest;
 use App\Http\Requests\Withdrawal\WithdrawRequest;
 use App\Services\Withdrawal\WithdrawalService;
+use App\Services\Http\IdempotencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -277,8 +278,15 @@ class WithdrawalController extends Controller
         }
 
         try {
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'withdrawal.palmpay.initiate');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
             $result = $this->withdrawalService->processPalmPayWithdrawalDirect(
-                $request->user()->id,
+                $userId,
                 (float) $request->input('amount'),
                 (string) $request->input('pin'),
                 (string) $request->input('bankCode'),
@@ -293,7 +301,10 @@ class WithdrawalController extends Controller
                 ? 'Withdrawal submitted; funds are being sent to your bank.'
                 : 'You have successfully completed a withdrawal of N'.number_format((float) $result['amount'], 2).'.';
 
-            return ResponseHelper::success($result, $message);
+            $response = ResponseHelper::success($result, $message);
+            $idempotency->store($request, $userId, 'withdrawal.palmpay.initiate', 200, $response->getData(true));
+
+            return $response;
         } catch (\Throwable $e) {
             Log::error('PalmPay direct withdrawal error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -315,8 +326,15 @@ class WithdrawalController extends Controller
     public function withdraw(WithdrawRequest $request): JsonResponse
     {
         try {
+            $userId = $request->user()->id;
+            $idempotency = app(IdempotencyService::class);
+            $replay = $idempotency->resolveReplay($request, $userId, 'withdrawal.withdraw');
+            if ($replay instanceof JsonResponse) {
+                return $replay;
+            }
+
             $result = $this->withdrawalService->processWithdrawal(
-                $request->user()->id,
+                $userId,
                 $request->bank_account_id,
                 (float) $request->amount,
                 $request->pin
@@ -327,7 +345,10 @@ class WithdrawalController extends Controller
                 ? 'Withdrawal submitted; funds are being sent to your bank.'
                 : 'You have successfully completed a withdrawal of N'.number_format($result['amount'], 2).'.';
 
-            return ResponseHelper::success($result, $message);
+            $response = ResponseHelper::success($result, $message);
+            $idempotency->store($request, $userId, 'withdrawal.withdraw', 200, $response->getData(true));
+
+            return $response;
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return ResponseHelper::notFound('Bank account not found.');
         } catch (\RuntimeException $e) {

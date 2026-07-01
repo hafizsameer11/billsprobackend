@@ -13,8 +13,13 @@ class PagocardsVirtualCardWebhookController extends Controller
         protected PagocardsVirtualCardWebhookService $processor
     ) {}
 
-    public function handle(Request $request): JsonResponse
+    public function handle(Request $request, string $token): JsonResponse
     {
+        $expected = (string) config('mastercard.webhook_token', '');
+        if ($expected === '' || ! hash_equals($expected, $token)) {
+            abort(404);
+        }
+
         $result = $this->processor->handle($request);
 
         $body = [

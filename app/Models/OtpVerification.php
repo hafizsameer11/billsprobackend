@@ -12,6 +12,7 @@ class OtpVerification extends Model
         'otp',
         'type',
         'verified',
+        'failed_attempts',
         'expires_at',
     ];
 

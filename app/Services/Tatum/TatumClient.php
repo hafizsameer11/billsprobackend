@@ -194,4 +194,36 @@ class TatumClient
 
         return $payload;
     }
+
+    public function enableWebhookHmac(string $hmacSecret): void
+    {
+        $this->putJsonV4('/subscription', [
+            'hmacSecret' => $hmacSecret,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    protected function putJsonV4(string $path, array $body): array
+    {
+        $body = $this->sanitizeV4Payload($body);
+
+        try {
+            $response = Http::withHeaders($this->headers())
+                ->timeout($this->timeout)
+                ->put($this->baseUrlV4.$path, $body);
+
+            $response->throw();
+
+            return $response->json() ?? [];
+        } catch (RequestException $e) {
+            throw new RuntimeException(
+                'Tatum V4 PUT '.$path.' failed: '.($e->response?->body() ?? $e->getMessage()),
+                0,
+                $e
+            );
+        }
+    }
 }

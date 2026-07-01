@@ -66,9 +66,12 @@ use Illuminate\Support\Facades\Route;
 /** In-app legal copy (registration, virtual cards, etc.) — public, no auth */
 Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
 
-Route::prefix('auth')->group(function () {
+Route::prefix('auth')->middleware('throttle:10,1')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
+});
+
+Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
     Route::post('/verify-email-otp', [AuthController::class, 'verifyEmailOtp']);
     Route::post('/resend-otp', [AuthController::class, 'resendOtp']);
     Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
@@ -77,19 +80,13 @@ Route::prefix('auth')->group(function () {
 });
 
 // ============================================================================
-// PALMPAY WEBHOOKS (public — verified via signature)
+// WEBHOOKS (public ingress — provider verification in controllers)
 // ============================================================================
 Route::post('/webhooks/palmpay', [PalmPayWebhookController::class, 'handle']);
 Route::post('/webhooks/palmpay/bill-payment', [PalmPayWebhookController::class, 'handle']);
-Route::post('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
-Route::get('/webhooks/palmpay/replay-pending', [PalmPayWebhookController::class, 'replayPending']);
 Route::post('/webhooks/tatum', [TatumWebhookController::class, 'handle']);
-Route::post('/webhooks/pagocards/virtual-cards', [PagocardsVirtualCardWebhookController::class, 'handle']);
-Route::get('/webhooks/tatum/replay/{id}', [TatumWebhookController::class, 'replay']);
-Route::get('/webhooks/tatum/replay-pending', [TatumWebhookController::class, 'replayPending']);
-
-/** Backfill received_assets from an existing crypto_deposit transaction (no auth — protect at reverse proxy if needed). */
-Route::get('/crypto/sync-received-asset', [CryptoReceivedAssetSyncController::class, 'syncFromTransaction']);
+Route::post('/webhooks/pagocards/virtual-cards/{token}', [PagocardsVirtualCardWebhookController::class, 'handle'])
+    ->middleware('throttle:60,1');
 
 // ============================================================================
 // PROTECTED ROUTES - Require Authentication
@@ -99,7 +96,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // ========================================================================
     // AUTHENTICATION ROUTES
     // ========================================================================
-    Route::prefix('auth')->group(function () {
+    Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
         Route::post('/set-pin', [AuthController::class, 'setPin']);
         Route::get('/check-pin-status', [AuthController::class, 'checkPinStatus']);
         Route::post('/verify-pin', [AuthController::class, 'verifyPin']);
@@ -336,6 +333,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
             Route::get('/summary', [AdminCryptoTreasuryController::class, 'summary']);
             Route::get('/deposits', [AdminCryptoTreasuryController::class, 'deposits']);
             Route::get('/received-assets', [AdminCryptoTreasuryController::class, 'receivedAssets']);
+            Route::get('/sync-received-asset', [CryptoReceivedAssetSyncController::class, 'syncFromTransaction']);
             Route::get('/sweeps', [AdminCryptoTreasuryController::class, 'sweeps']);
             Route::post('/sweeps', [AdminCryptoTreasuryController::class, 'storeSweep']);
             Route::post('/sweeps/{id}/execute', [AdminCryptoTreasuryController::class, 'executeSweep']);
