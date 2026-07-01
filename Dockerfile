@@ -55,8 +55,8 @@ RUN chown -R www-data:www-data /var/www/html/storage \
     && chmod -R 775 /var/www/html/storage \
     && chmod -R 775 /var/www/html/bootstrap/cache
 
-# Install PHP dependencies
-RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+# Install PHP dependencies (local env during image build — secrets are injected at container runtime)
+RUN APP_ENV=local composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
 
 # Expose port 80
 EXPOSE 80

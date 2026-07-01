@@ -28,7 +28,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        if (app()->environment('production') && ! app()->environment('testing')) {
+        if ($this->shouldEnforceProductionConfig()) {
             if (config('app.debug')) {
                 throw new \RuntimeException('APP_DEBUG must be false in production.');
             }
@@ -53,5 +53,24 @@ class AppServiceProvider extends ServiceProvider
             // Auto-detect HTTPS from proxy headers
             URL::forceScheme('https');
         }
+    }
+
+    /**
+     * Skip strict production checks during Docker image build / composer autoload scripts.
+     */
+    protected function shouldEnforceProductionConfig(): bool
+    {
+        if (! app()->environment('production') || app()->environment('testing')) {
+            return false;
+        }
+
+        if (app()->runningInConsole()) {
+            $command = $_SERVER['argv'][1] ?? '';
+            if (in_array($command, ['package:discover', 'vendor:publish', 'clear-compiled'], true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
