@@ -102,6 +102,25 @@ return [
     ],
 
     /**
+     * Profit Center catalog order — mirrors the client PDF (no scaffold / per-asset duplicates).
+     * Each entry is either a `platform_rates` slug or a synthetic `type` row.
+     */
+    'catalog' => [
+        ['group' => 'Fiat & transfers', 'slug' => 'fiat|withdrawal|||'],
+        ['group' => 'Fiat & transfers', 'slug' => 'fiat|deposit|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|visa_creation|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|creation|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|visa_fund|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|fund|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|visa_decline_fee|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|decline_fee|||'],
+        ['group' => 'Crypto', 'type' => 'crypto_buy_sell'],
+        ['group' => 'Crypto', 'slug' => 'crypto|deposit|||'],
+        ['group' => 'Bill payments', 'type' => 'commission_airtime'],
+        ['group' => 'Bill payments', 'type' => 'commission_betting'],
+    ],
+
+    /**
      * Maps `service_profit_settings.service_key` → platform_rate slug for admin profit reporting.
      */
     'service_profit_links' => [

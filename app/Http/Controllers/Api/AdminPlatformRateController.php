@@ -21,9 +21,9 @@ class AdminPlatformRateController extends Controller
     public function meta(): JsonResponse
     {
         $fiatServices = [
-            ['key' => 'deposit', 'label' => 'Fiat deposit (flat NGN fee, legacy flow)'],
-            ['key' => 'withdrawal', 'label' => 'Withdrawal'],
-            ['key' => 'bill_payment', 'label' => 'Bill Payment'],
+            ['key' => 'deposit', 'label' => 'Wallet deposit (PalmPay)'],
+            ['key' => 'withdrawal', 'label' => 'Bank transfer (withdrawal)'],
+            ['key' => 'bill_payment', 'label' => 'Bill payment (fee-based categories)'],
         ];
 
         $billSubs = DB::table('bill_payment_categories')
@@ -35,10 +35,10 @@ class AdminPlatformRateController extends Controller
             ->all();
 
         $cryptoServices = [
-            ['key' => 'deposit', 'label' => 'Deposit (on-chain receive)'],
-            ['key' => 'withdrawal', 'label' => 'Send / withdrawal (on-chain out)'],
-            ['key' => 'buy', 'label' => 'Buy — FX markup (`fixed_fee_ngn` per $1 USD notional on NGN/USD leg)'],
-            ['key' => 'sell', 'label' => 'Sell — FX markup (`fixed_fee_ngn` per $1 USD notional on NGN/USD leg)'],
+            ['key' => 'deposit', 'label' => 'Crypto receive (on-chain)'],
+            ['key' => 'withdrawal', 'label' => 'Crypto send (on-chain)'],
+            ['key' => 'buy', 'label' => 'Crypto buy — FX markup'],
+            ['key' => 'sell', 'label' => 'Crypto sell — FX markup'],
         ];
 
         $cryptoAssets = WalletCurrency::query()
@@ -55,13 +55,13 @@ class AdminPlatformRateController extends Controller
             ->all();
 
         $virtualServices = [
-            ['key' => 'creation', 'label' => 'Mastercard — card creation'],
-            ['key' => 'fund', 'label' => 'Mastercard — deposit / fund card'],
-            ['key' => 'withdraw', 'label' => 'Withdraw from card'],
-            ['key' => 'visa_creation', 'label' => 'Visa — card creation'],
-            ['key' => 'visa_fund', 'label' => 'Visa — deposit / fund card'],
+            ['key' => 'creation', 'label' => 'Mastercard — card issuance'],
+            ['key' => 'fund', 'label' => 'Mastercard — card funding'],
             ['key' => 'decline_fee', 'label' => 'Mastercard — decline fee (2nd+)'],
+            ['key' => 'visa_creation', 'label' => 'Visa — card issuance'],
+            ['key' => 'visa_fund', 'label' => 'Visa — card funding'],
             ['key' => 'visa_decline_fee', 'label' => 'Visa — decline fee (2nd+)'],
+            ['key' => 'withdraw', 'label' => 'Withdraw from card (legacy)'],
         ];
 
         return ResponseHelper::success([

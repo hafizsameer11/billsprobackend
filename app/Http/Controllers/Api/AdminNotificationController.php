@@ -4,15 +4,21 @@ namespace App\Http\Controllers\Api;
 
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
+use App\Jobs\DispatchAdminPushCampaignJob;
 use App\Models\AdminBanner;
 use App\Models\AdminNotification;
 use App\Models\Notification;
 use App\Models\User;
+use App\Services\Admin\AdminNotificationAudienceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminNotificationController extends Controller
 {
+    public function __construct(
+        protected AdminNotificationAudienceService $audienceService,
+    ) {}
+
     public function index(Request $request): JsonResponse
     {
         $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
@@ -33,7 +39,8 @@ class AdminNotificationController extends Controller
             'attachment' => 'nullable|string|max:1000000',
         ]);
 
-        $users = $this->resolveAudienceUsers($data['audience']);
+        $users = $this->audienceService->resolveUsers($data['audience']);
+        $pushQueuedCount = $this->audienceService->countUsersWithPushTokens($data['audience']);
         $now = now();
 
         $campaign = AdminNotification::query()->create([
@@ -42,6 +49,7 @@ class AdminNotificationController extends Controller
             'audience' => $data['audience'],
             'attachment' => $data['attachment'] ?? null,
             'sent_count' => $users->count(),
+            'push_queued_count' => $pushQueuedCount,
             'created_by' => $request->user()?->id,
         ]);
 
@@ -63,7 +71,15 @@ class AdminNotificationController extends Controller
             Notification::query()->insert($rows);
         }
 
-        return ResponseHelper::success($campaign->fresh(), 'Push notification created.');
+        if ($pushQueuedCount > 0) {
+            DispatchAdminPushCampaignJob::dispatch($campaign->id);
+        }
+
+        $message = $pushQueuedCount > 0
+            ? "Push notification created. Expo push queued for {$pushQueuedCount} user(s) with saved device tokens."
+            : 'Push notification created. No users in this audience have a saved Expo push token yet.';
+
+        return ResponseHelper::success($campaign->fresh(), $message);
     }
 
     public function destroy(AdminNotification $notification): JsonResponse
@@ -105,24 +121,5 @@ class AdminNotificationController extends Controller
         $banner->delete();
 
         return ResponseHelper::success(null, 'Banner deleted.');
-    }
-
-    /**
-     * @return \Illuminate\Database\Eloquent\Collection<int, User>
-     */
-    protected function resolveAudienceUsers(string $audience)
-    {
-        return match ($audience) {
-            'all' => User::query()->select('id')->get(),
-            'active' => User::query()->where('account_status', 'active')->select('id')->get(),
-            'banned' => User::query()->where('account_status', 'banned')->select('id')->get(),
-            'kyc_pending' => User::query()
-                ->whereHas('kyc', fn ($q) => $q->where('status', 'pending'))
-                ->select('id')
-                ->get(),
-            'kyc_verified' => User::query()->where('kyc_completed', true)->select('id')->get(),
-            'new_users_30d' => User::query()->where('created_at', '>=', now()->subDays(30))->select('id')->get(),
-            default => User::query()->select('id')->get(),
-        };
     }
 }

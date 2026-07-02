@@ -13,6 +13,7 @@ class AdminNotification extends Model
         'audience',
         'attachment',
         'sent_count',
+        'push_queued_count',
         'created_by',
     ];
 
