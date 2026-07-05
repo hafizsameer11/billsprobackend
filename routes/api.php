@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\AdminKycController;
 use App\Http\Controllers\Api\AdminMasterWalletController;
 use App\Http\Controllers\Api\AdminNotificationController;
 use App\Http\Controllers\Api\AdminPlatformRateController;
+use App\Http\Controllers\Api\AdminServiceMaintenanceController;
 use App\Http\Controllers\Api\AdminCommissionController;
 use App\Http\Controllers\Api\AdminProfitController;
 use App\Http\Controllers\Api\AdminStatsController;
@@ -37,6 +38,7 @@ use App\Http\Controllers\Api\PalmPayBillPaymentController;
 use App\Http\Controllers\Api\PalmPayDepositController;
 use App\Http\Controllers\Api\PagocardsVirtualCardWebhookController;
 use App\Http\Controllers\Api\PalmPayWebhookController;
+use App\Http\Controllers\Api\ServiceMaintenanceController;
 use App\Http\Controllers\Api\SupportController;
 use App\Http\Controllers\Api\TatumWebhookController;
 use App\Http\Controllers\Api\TransactionController;
@@ -65,6 +67,7 @@ use Illuminate\Support\Facades\Route;
 // ============================================================================
 /** In-app legal copy (registration, virtual cards, etc.) — public, no auth */
 Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
+Route::get('/service-maintenance', [ServiceMaintenanceController::class, 'index']);
 
 Route::prefix('auth')->middleware('throttle:10,1')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
@@ -316,6 +319,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/notifications/banners', [AdminNotificationController::class, 'banners']);
         Route::post('/notifications/banners', [AdminNotificationController::class, 'storeBanner']);
         Route::delete('/notifications/banners/{banner}', [AdminNotificationController::class, 'destroyBanner']);
+
+        Route::get('/service-maintenance', [AdminServiceMaintenanceController::class, 'index']);
+        Route::put('/service-maintenance/{id}', [AdminServiceMaintenanceController::class, 'update']);
 
         Route::prefix('webhooks')->group(function () {
             Route::get('/tatum/raw', [AdminWebhookController::class, 'tatumRaw']);

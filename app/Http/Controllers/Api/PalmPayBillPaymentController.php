@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ServiceUnderMaintenanceException;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Services\PalmPay\PalmPayBillApiService;
@@ -141,6 +142,11 @@ class PalmPayBillPaymentController extends Controller
             $idempotency->store($request, $userId, 'palmpay.bill.create-order', 200, $response->getData(true));
 
             return $response;
+        } catch (ServiceUnderMaintenanceException $e) {
+            return ResponseHelper::error($e->getMessage(), 503, [
+                'code' => 'SERVICE_MAINTENANCE',
+                'maintenance' => $e->maintenance,
+            ]);
         } catch (\Throwable $e) {
             Log::error('PalmPay bill create failed', ['e' => $e->getMessage()]);
 

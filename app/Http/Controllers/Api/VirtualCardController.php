@@ -13,6 +13,7 @@ use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Http\Requests\VirtualCard\FundingEstimateRequest;
 use App\Http\Requests\VirtualCard\WithdrawCardRequest;
 use App\Models\VirtualCardProviderWebhookEvent;
+use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\VirtualCard\VirtualCardService;
 use App\Services\Http\IdempotencyService;
 use Illuminate\Http\JsonResponse;
@@ -30,9 +31,26 @@ class VirtualCardController extends Controller
 
     protected VirtualCardService $virtualCardService;
 
-    public function __construct(VirtualCardService $virtualCardService)
-    {
+    public function __construct(
+        VirtualCardService $virtualCardService,
+        protected ServiceMaintenanceService $maintenanceService,
+    ) {
         $this->virtualCardService = $virtualCardService;
+    }
+
+    /**
+     * @return JsonResponse|null
+     */
+    protected function maintenanceErrorResponse(array $block): ?JsonResponse
+    {
+        return ResponseHelper::error(
+            (string) ($block['message'] ?? 'This service is temporarily unavailable.'),
+            (int) ($block['status'] ?? 503),
+            [
+                'code' => $block['code'] ?? 'SERVICE_MAINTENANCE',
+                'maintenance' => $block['maintenance'] ?? null,
+            ]
+        );
     }
 
     /**
@@ -199,6 +217,10 @@ class VirtualCardController extends Controller
     public function create(CreateCardRequest $request): JsonResponse
     {
         try {
+            if ($block = $this->maintenanceService->blockResult($this->maintenanceService->virtualCardSlugs('mastercard', 'create'))) {
+                return $this->maintenanceErrorResponse($block);
+            }
+
             $userId = $request->user()->id;
             $idempotency = app(IdempotencyService::class);
             $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.create');
@@ -214,7 +236,11 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->createCard($request->user()->id, $request->validated());
 
             if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400);
+                $errors = isset($result['maintenance'])
+                    ? ['code' => $result['code'] ?? 'SERVICE_MAINTENANCE', 'maintenance' => $result['maintenance']]
+                    : null;
+
+                return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400, $errors);
             }
 
             try {
@@ -317,7 +343,11 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->fundCard($userId, $id, $request->validated());
 
             if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400);
+                $errors = isset($result['maintenance'])
+                    ? ['code' => $result['code'] ?? 'SERVICE_MAINTENANCE', 'maintenance' => $result['maintenance']]
+                    : null;
+
+                return ResponseHelper::error($result['message'] ?? 'Card funding failed', $result['status'] ?? 400, $errors);
             }
 
             try {

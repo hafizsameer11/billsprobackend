@@ -11,6 +11,7 @@ use App\Models\FiatWallet;
 use App\Models\Transaction;
 use App\Services\Auth\AuthService;
 use App\Services\Platform\PlatformRateResolver;
+use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 
@@ -25,6 +26,7 @@ class BillPaymentService
         WalletService $walletService,
         protected PlatformRateResolver $platformRates,
         protected BillPaymentCommissionMetadata $commissionMetadata,
+        protected ServiceMaintenanceService $maintenance,
     ) {
         $this->authService = $authService;
         $this->walletService = $walletService;
@@ -246,6 +248,10 @@ class BillPaymentService
             ->where('category_id', $category->id)
             ->where('is_active', true)
             ->firstOrFail();
+
+        if ($block = $this->maintenance->blockResult($this->maintenance->billPaymentSlugs($category->code, $provider->code))) {
+            return $block;
+        }
 
         // Get wallet
         $wallet = $this->walletService->getFiatWallet($userId, $data['currency'] ?? 'NGN');

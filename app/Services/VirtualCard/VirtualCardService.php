@@ -12,6 +12,7 @@ use App\Models\VirtualCardProviderWebhookEvent;
 use App\Models\VirtualCardTransaction;
 use App\Services\Crypto\CryptoWalletService;
 use App\Services\Platform\PlatformRateResolver;
+use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -28,6 +29,7 @@ class VirtualCardService
         protected WalletService $walletService,
         protected CryptoWalletService $cryptoWalletService,
         protected PlatformRateResolver $platformRates,
+        protected ServiceMaintenanceService $maintenance,
     ) {}
 
     /**
@@ -117,6 +119,10 @@ class VirtualCardService
      */
     public function createCard(int $userId, array $data): array
     {
+        if ($block = $this->maintenance->blockResult($this->maintenance->virtualCardSlugs('mastercard', 'create'))) {
+            return $block;
+        }
+
         $user = User::findOrFail($userId);
         $paymentWalletType = (string) ($data['payment_wallet_type'] ?? '');
         $fiatCurrency = (string) ($data['payment_wallet_currency'] ?? 'NGN');
@@ -334,6 +340,10 @@ class VirtualCardService
      */
     public function createVisaCard(int $userId, array $data): array
     {
+        if ($block = $this->maintenance->blockResult($this->maintenance->virtualCardSlugs('visa', 'create'))) {
+            return $block;
+        }
+
         $user = User::findOrFail($userId);
         $paymentWalletType = (string) ($data['payment_wallet_type'] ?? '');
         $fiatCurrency = (string) ($data['payment_wallet_currency'] ?? 'NGN');
@@ -866,6 +876,11 @@ class VirtualCardService
         $card = VirtualCard::where('id', $cardId)
             ->where('user_id', $userId)
             ->firstOrFail();
+
+        $scheme = strtolower((string) $card->card_type);
+        if ($block = $this->maintenance->blockResult($this->maintenance->virtualCardSlugs($scheme, 'fund'))) {
+            return $block;
+        }
 
         $this->ensurePagocardsBillingPersisted($card);
         $card->refresh();

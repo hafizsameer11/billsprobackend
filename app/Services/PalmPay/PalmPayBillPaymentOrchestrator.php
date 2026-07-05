@@ -2,12 +2,14 @@
 
 namespace App\Services\PalmPay;
 
+use App\Exceptions\ServiceUnderMaintenanceException;
 use App\Models\FiatWallet;
 use App\Models\PalmPayBillOrder;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Auth\AuthService;
 use App\Services\BillPayment\BillPaymentCommissionMetadata;
+use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +25,7 @@ class PalmPayBillPaymentOrchestrator
         protected AuthService $authService,
         protected WalletService $walletService,
         protected BillPaymentCommissionMetadata $commissionMetadata,
+        protected ServiceMaintenanceService $maintenance,
     ) {}
 
     /**
@@ -33,6 +36,14 @@ class PalmPayBillPaymentOrchestrator
         $sceneCode = $data['sceneCode'];
         if (! in_array($sceneCode, self::SCENES, true)) {
             throw new RuntimeException('sceneCode must be one of: '.implode(', ', self::SCENES));
+        }
+
+        $billerId = strtoupper(trim((string) ($data['billerId'] ?? '')));
+        if ($block = $this->maintenance->blockResult($this->maintenance->billPaymentSlugs($sceneCode, $billerId !== '' ? $billerId : null))) {
+            throw new ServiceUnderMaintenanceException(
+                (array) ($block['maintenance'] ?? []),
+                (string) ($block['message'] ?? 'This service is temporarily unavailable.')
+            );
         }
 
         $user = User::findOrFail($userId);
