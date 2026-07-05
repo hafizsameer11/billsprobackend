@@ -1311,8 +1311,13 @@ class VirtualCardService
 
             // Provider may embed recent card transactions in card-details response.
             $this->syncProviderTransactions($userId, $cardId, $response);
-        } catch (MastercardApiException) {
-            // return cached card
+        } catch (\Throwable $exception) {
+            ApplicationLog::warning('virtual_card', 'virtual_card.get_card.provider_refresh_failed', [
+                'user_id' => $userId,
+                'virtual_card_id' => $cardId,
+                'message' => $exception->getMessage(),
+            ]);
+            // Return cached DB row when provider is down (e.g. maintenance / Pagocards outage).
         }
 
         return $card->fresh();
