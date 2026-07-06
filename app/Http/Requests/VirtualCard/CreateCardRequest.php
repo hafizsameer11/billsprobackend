@@ -31,7 +31,6 @@ class CreateCardRequest extends FormRequest
             'card_type' => 'nullable|string|in:mastercard,visa',
             'payment_wallet_type' => 'required|string|in:naira_wallet,crypto_wallet',
             'payment_wallet_currency' => 'nullable|string|max:10',
-            'pin' => 'required|string|size:4',
             'billing_address_street' => 'nullable|string|max:255',
             'billing_address_city' => 'nullable|string|max:100',
             'billing_address_state' => 'nullable|string|max:100',

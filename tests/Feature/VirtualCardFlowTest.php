@@ -17,7 +17,7 @@ class VirtualCardFlowTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_create_card_requires_payment_wallet_and_pin(): void
+    public function test_create_card_requires_payment_wallet(): void
     {
         $user = User::factory()->make(['id' => 1]);
         Sanctum::actingAs($user);
@@ -27,7 +27,7 @@ class VirtualCardFlowTest extends TestCase
         ]);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['payment_wallet_type', 'pin']);
+            ->assertJsonValidationErrors(['payment_wallet_type']);
     }
 
     public function test_fund_card_maps_provider_error_response(): void

@@ -228,11 +228,6 @@ class VirtualCardController extends Controller
                 return $replay;
             }
 
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
-            }
-
             $result = $this->virtualCardService->createCard($request->user()->id, $request->validated());
 
             if (! $result['success']) {
