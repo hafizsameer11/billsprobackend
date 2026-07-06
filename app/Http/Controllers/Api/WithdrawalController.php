@@ -269,7 +269,6 @@ class WithdrawalController extends Controller
             'accountNumber' => ['required', 'string', 'min:6', 'max:30'],
             'accountName' => ['required', 'string', 'max:120'],
             'phoneNumber' => ['nullable', 'string', 'max:20'],
-            'pin' => ['required', 'string', 'size:4', 'regex:/^[0-9]{4}$/'],
         ]);
 
         $currency = strtoupper((string) $request->input('currency', 'NGN'));
@@ -288,7 +287,6 @@ class WithdrawalController extends Controller
             $result = $this->withdrawalService->processPalmPayWithdrawalDirect(
                 $userId,
                 (float) $request->input('amount'),
-                (string) $request->input('pin'),
                 (string) $request->input('bankCode'),
                 (string) $request->input('accountNumber'),
                 (string) $request->input('accountName'),
@@ -336,8 +334,7 @@ class WithdrawalController extends Controller
             $result = $this->withdrawalService->processWithdrawal(
                 $userId,
                 $request->bank_account_id,
-                (float) $request->amount,
-                $request->pin
+                (float) $request->amount
             );
 
             $payoutStatus = $result['payout_status'] ?? 'completed';

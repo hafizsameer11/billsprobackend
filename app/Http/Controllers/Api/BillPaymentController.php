@@ -282,8 +282,7 @@ class BillPaymentController extends Controller
 
             $result = $this->billPaymentService->confirmBillPayment(
                 $request->user()->id,
-                $request->transactionId,
-                $request->pin
+                $request->transactionId
             );
 
             if (! $result['success']) {

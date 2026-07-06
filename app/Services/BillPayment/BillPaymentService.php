@@ -406,9 +406,9 @@ class BillPaymentService
     /**
      * Confirm bill payment
      */
-    public function confirmBillPayment(int $userId, int $transactionId, string $pin): array
+    public function confirmBillPayment(int $userId, int $transactionId): array
     {
-        // Get transaction first for PIN verification (outside transaction)
+        // Get transaction first (outside transaction)
         $transaction = Transaction::where('id', $transactionId)
             ->where('user_id', $userId)
             ->where('type', 'bill_payment')
@@ -419,22 +419,6 @@ class BillPaymentService
             return [
                 'success' => false,
                 'message' => 'Transaction not found or already processed',
-            ];
-        }
-
-        // Verify PIN
-        $user = $transaction->user;
-        if (! $user->pin) {
-            return [
-                'success' => false,
-                'message' => 'PIN not set. Please setup your PIN first.',
-            ];
-        }
-
-        if (! $this->authService->verifyPin($user, $pin)) {
-            return [
-                'success' => false,
-                'message' => 'Invalid PIN',
             ];
         }
 

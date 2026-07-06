@@ -281,13 +281,7 @@ class CryptoController extends Controller
                 'blockchain' => 'required|string',
                 'amount' => 'required|numeric|min:0.01',
                 'payment_method' => 'nullable|string|in:naira',
-                'pin' => 'required|string|size:4',
             ]);
-
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
-            }
 
             $result = $this->cryptoService->confirmBuyCrypto($request->user()->id, $data);
 
@@ -359,13 +353,7 @@ class CryptoController extends Controller
                 'currency' => 'required|string',
                 'blockchain' => 'required|string',
                 'amount' => 'required|numeric|min:0.00000001',
-                'pin' => 'required|string|size:4',
             ]);
-
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
-            }
 
             $result = $this->cryptoService->confirmSellCrypto($request->user()->id, $data);
 
@@ -436,7 +424,6 @@ class CryptoController extends Controller
                 'amount' => 'required|numeric|min:0.00000001',
                 'address' => 'required|string',
                 'network' => 'nullable|string',
-                'pin' => 'required|string|size:4',
             ]);
 
             $userId = $request->user()->id;
@@ -444,11 +431,6 @@ class CryptoController extends Controller
             $replay = $idempotency->resolveReplay($request, $userId, 'crypto.send');
             if ($replay instanceof JsonResponse) {
                 return $replay;
-            }
-
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $data['pin']);
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
             }
 
             $result = $this->cryptoService->sendCrypto($userId, array_merge($data, [

@@ -47,9 +47,6 @@ class PalmPayBillPaymentOrchestrator
         }
 
         $user = User::findOrFail($userId);
-        if (! $this->authService->verifyPin($user, $data['pin'])) {
-            throw new RuntimeException('Invalid PIN');
-        }
 
         $normalizedRechargeAccount = $this->normalizeRechargeAccount(
             (string) ($data['rechargeAccount'] ?? ''),

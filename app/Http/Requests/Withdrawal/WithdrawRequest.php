@@ -24,7 +24,6 @@ class WithdrawRequest extends FormRequest
         return [
             'bank_account_id' => 'required|integer|exists:bank_accounts,id',
             'amount' => 'required|numeric|min:1',
-            'pin' => 'required|string|size:4|regex:/^[0-9]{4}$/',
         ];
     }
 
@@ -40,9 +39,6 @@ class WithdrawRequest extends FormRequest
             'bank_account_id.exists' => 'Selected bank account does not exist.',
             'amount.required' => 'Withdrawal amount is required.',
             'amount.min' => 'Withdrawal amount must be at least 1.',
-            'pin.required' => 'PIN is required.',
-            'pin.size' => 'PIN must be exactly 4 digits.',
-            'pin.regex' => 'PIN must contain only numbers.',
         ];
     }
 }

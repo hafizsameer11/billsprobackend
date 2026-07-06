@@ -324,10 +324,6 @@ class VirtualCardController extends Controller
     {
         try {
             $userId = $request->user()->id;
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
-            }
 
             $idempotency = app(IdempotencyService::class);
             $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.fund');

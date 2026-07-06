@@ -161,11 +161,6 @@ class VisaVirtualCardController extends Controller
                 return ResponseHelper::notFound('Visa virtual card not found. Use the Mastercard fund endpoint for Mastercard cards.');
             }
 
-            $pinCheck = $this->requireValidTransactionPin($request->user(), $request->input('pin'));
-            if ($pinCheck instanceof JsonResponse) {
-                return $pinCheck;
-            }
-
             $idempotency = app(IdempotencyService::class);
             $replay = $idempotency->resolveReplay($request, $userId, 'virtual-cards.visa.fund');
             if ($replay instanceof JsonResponse) {

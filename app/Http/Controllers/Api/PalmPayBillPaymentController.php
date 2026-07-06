@@ -110,7 +110,6 @@ class PalmPayBillPaymentController extends Controller
             'rechargeAccount' => ['required', 'string', 'max:50'],
             'amount' => ['required', 'numeric', 'min:0.01'],
             'currency' => ['sometimes', 'string', 'max:10'],
-            'pin' => ['required', 'digits:4'],
         ]);
 
         try {
@@ -135,7 +134,6 @@ class PalmPayBillPaymentController extends Controller
                 'planName' => $request->input('planName'),
                 'amount' => (float) $request->input('amount'),
                 'currency' => $request->input('currency', 'NGN'),
-                'pin' => $request->input('pin'),
             ]);
 
             $response = ResponseHelper::success($result, 'Bill order created.');

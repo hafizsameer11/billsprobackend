@@ -207,14 +207,13 @@ class WithdrawalService
     public function processWithdrawal(
         int $userId,
         int $bankAccountId,
-        float $amount,
-        string $pin
+        float $amount
     ): array {
         if (PalmPayConfig::usePalmPayForWithdrawal()) {
-            return $this->processPalmPayWithdrawal($userId, $bankAccountId, $amount, $pin);
+            return $this->processPalmPayWithdrawal($userId, $bankAccountId, $amount);
         }
 
-        return $this->processLegacyInternalWithdrawal($userId, $bankAccountId, $amount, $pin);
+        return $this->processLegacyInternalWithdrawal($userId, $bankAccountId, $amount);
     }
 
     /**
@@ -252,7 +251,6 @@ class WithdrawalService
     public function processPalmPayWithdrawalDirect(
         int $userId,
         float $amount,
-        string $pin,
         string $bankCode,
         string $accountNumber,
         string $accountName,
@@ -264,9 +262,6 @@ class WithdrawalService
         }
 
         $user = User::findOrFail($userId);
-        if (! $user->pin || ! Hash::check($pin, $user->pin)) {
-            throw new \Exception('Invalid PIN');
-        }
         if ($amount <= 0) {
             throw new \Exception('Invalid withdrawal amount');
         }
@@ -445,15 +440,10 @@ class WithdrawalService
     private function processLegacyInternalWithdrawal(
         int $userId,
         int $bankAccountId,
-        float $amount,
-        string $pin
+        float $amount
     ): array {
-        return DB::transaction(function () use ($userId, $bankAccountId, $amount, $pin) {
-            // Verify PIN
+        return DB::transaction(function () use ($userId, $bankAccountId, $amount) {
             $user = User::findOrFail($userId);
-            if (! $user->pin || ! Hash::check($pin, $user->pin)) {
-                throw new \Exception('Invalid PIN');
-            }
 
             // Get bank account
             $bankAccount = BankAccount::where('user_id', $userId)
@@ -559,13 +549,9 @@ class WithdrawalService
     private function processPalmPayWithdrawal(
         int $userId,
         int $bankAccountId,
-        float $amount,
-        string $pin
+        float $amount
     ): array {
         $user = User::findOrFail($userId);
-        if (! $user->pin || ! Hash::check($pin, $user->pin)) {
-            throw new \Exception('Invalid PIN');
-        }
 
         if ($amount <= 0) {
             throw new \Exception('Invalid withdrawal amount');
