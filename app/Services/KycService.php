@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Models\Kyc;
 use App\Models\User;
+use App\Services\CheckMyNinBvn\CheckMyNinBvnClient;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class KycService
@@ -18,7 +20,6 @@ class KycService
         try {
             $user = User::findOrFail($userId);
 
-            // Validate that at least some data is provided
             if (empty($data)) {
                 return [
                     'success' => false,
@@ -26,16 +27,15 @@ class KycService
                 ];
             }
 
-            // Prepare KYC data
-            $kycData = [
-                'first_name' => $data['first_name'] ?? $user->first_name,
-                'last_name' => $data['last_name'] ?? $user->last_name,
-                'email' => $data['email'] ?? $user->email,
-                'date_of_birth' => $data['date_of_birth'] ?? null,
-                'bvn_number' => $data['bvn_number'] ?? null,
-                'nin_number' => $data['nin_number'] ?? null,
-                'status' => 'pending',
-            ];
+            $nin = trim((string) ($data['nin_number'] ?? ''));
+            $bvn = trim((string) ($data['bvn_number'] ?? ''));
+
+            if ($nin === '' || $bvn === '') {
+                return [
+                    'success' => false,
+                    'message' => 'NIN and BVN are required for identity verification.',
+                ];
+            }
 
             // Validate email format if provided
             if (isset($data['email']) && !filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
@@ -49,14 +49,12 @@ class KycService
             if (isset($data['date_of_birth'])) {
                 try {
                     $dateOfBirth = Carbon::parse($data['date_of_birth']);
-                    // Ensure date is not in the future
                     if ($dateOfBirth->isFuture()) {
                         return [
                             'success' => false,
                             'message' => 'Date of birth cannot be in the future.',
                         ];
                     }
-                    // Ensure user is at least 18 years old (optional validation)
                     if ($dateOfBirth->age < 18) {
                         return [
                             'success' => false,
@@ -70,6 +68,32 @@ class KycService
                     ];
                 }
             }
+
+            $identity = $this->verifyIdentityWithProvider($nin, $bvn);
+            if (!$identity['success']) {
+                return [
+                    'success' => false,
+                    'message' => $identity['message'],
+                ];
+            }
+
+            $kycData = [
+                'first_name' => $data['first_name'] ?? $user->first_name,
+                'last_name' => $data['last_name'] ?? $user->last_name,
+                'email' => $data['email'] ?? $user->email,
+                'date_of_birth' => $data['date_of_birth'] ?? null,
+                'bvn_number' => $bvn,
+                'nin_number' => $nin,
+                'location' => $data['location'] ?? null,
+                'nin_verification_report_id' => $identity['nin']['report_id'] ?? null,
+                'bvn_verification_report_id' => $identity['bvn']['report_id'] ?? null,
+                'nin_verification_status' => ($identity['nin']['success'] ?? false) ? 'success' : 'failed',
+                'bvn_verification_status' => ($identity['bvn']['success'] ?? false) ? 'success' : 'failed',
+                'nin_verification_data' => $identity['nin']['data'] ?? null,
+                'bvn_verification_data' => $identity['bvn']['data'] ?? null,
+                'identity_verified_at' => now(),
+                'status' => 'pending',
+            ];
 
             $kyc = Kyc::updateOrCreate(
                 ['user_id' => $userId],
@@ -87,7 +111,6 @@ class KycService
                 'message' => 'User not found. Please ensure you are authenticated correctly.',
             ];
         } catch (\Illuminate\Database\QueryException $e) {
-            $errorCode = $e->getCode();
             $errorMessage = $e->getMessage();
 
             if (str_contains($errorMessage, 'Duplicate entry')) {
@@ -99,18 +122,62 @@ class KycService
 
             return [
                 'success' => false,
-                'message' => config('app.debug') 
-                    ? "Database error: {$errorMessage}" 
+                'message' => config('app.debug')
+                    ? "Database error: {$errorMessage}"
                     : 'An error occurred while saving KYC information. Please try again.',
+            ];
+        } catch (\RuntimeException $e) {
+            Log::error('KYC identity provider config error: '.$e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => 'Identity verification is temporarily unavailable. Please try again later.',
             ];
         } catch (\Exception $e) {
             return [
                 'success' => false,
-                'message' => config('app.debug') 
-                    ? "Error: {$e->getMessage()}" 
+                'message' => config('app.debug')
+                    ? "Error: {$e->getMessage()}"
                     : 'An error occurred while submitting KYC information. Please try again.',
             ];
         }
+    }
+
+    /**
+     * Verify NIN + BVN with CheckMyNinBvn.
+     *
+     * @return array{success: bool, message: string, nin: array, bvn: array}
+     */
+    protected function verifyIdentityWithProvider(string $nin, string $bvn): array
+    {
+        $client = CheckMyNinBvnClient::fromConfig();
+
+        $ninResult = $client->verifyNin($nin);
+        if (!$ninResult['success']) {
+            return [
+                'success' => false,
+                'message' => $ninResult['message'] ?: 'NIN verification failed. Please check the NIN and try again.',
+                'nin' => $ninResult,
+                'bvn' => [],
+            ];
+        }
+
+        $bvnResult = $client->verifyBvn($bvn);
+        if (!$bvnResult['success']) {
+            return [
+                'success' => false,
+                'message' => $bvnResult['message'] ?: 'BVN verification failed. Please check the BVN and try again.',
+                'nin' => $ninResult,
+                'bvn' => $bvnResult,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Identity verified successfully',
+            'nin' => $ninResult,
+            'bvn' => $bvnResult,
+        ];
     }
 
     /**
@@ -179,7 +246,6 @@ class KycService
             'rejection_reason' => $rejectionReason,
         ]);
 
-        // Update user KYC status
         if ($status === 'approved') {
             $kyc->user->update(['kyc_completed' => true]);
         } else {

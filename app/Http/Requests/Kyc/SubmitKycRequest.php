@@ -22,12 +22,13 @@ class SubmitKycRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'first_name' => 'nullable|string|max:255',
-            'last_name' => 'nullable|string|max:255',
-            'email' => 'nullable|email',
-            'date_of_birth' => 'nullable|date',
-            'bvn_number' => 'nullable|string|max:255',
-            'nin_number' => 'nullable|string|max:255',
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
+            'email' => 'required|email',
+            'date_of_birth' => 'required|date',
+            'bvn_number' => 'required|string|size:11',
+            'nin_number' => 'required|string|size:11',
+            'location' => 'required|string|max:500',
         ];
     }
 
@@ -41,6 +42,9 @@ class SubmitKycRequest extends FormRequest
         return [
             'email.email' => 'Please provide a valid email address.',
             'date_of_birth.date' => 'Please provide a valid date of birth.',
+            'bvn_number.size' => 'BVN must be exactly 11 digits.',
+            'nin_number.size' => 'NIN must be exactly 11 digits.',
+            'location.required' => 'Please provide your location.',
         ];
     }
 }
