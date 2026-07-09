@@ -69,13 +69,8 @@ class KycService
                 }
             }
 
-            $identity = $this->verifyIdentityWithProvider($nin, $bvn);
-            if (!$identity['success']) {
-                return [
-                    'success' => false,
-                    'message' => $identity['message'],
-                ];
-            }
+            $existing = Kyc::where('user_id', $userId)->first();
+            $needsIdentityVerification = $this->shouldVerifyIdentity($existing, $nin, $bvn);
 
             $kycData = [
                 'first_name' => $data['first_name'] ?? $user->first_name,
@@ -85,15 +80,31 @@ class KycService
                 'bvn_number' => $bvn,
                 'nin_number' => $nin,
                 'location' => $data['location'] ?? null,
-                'nin_verification_report_id' => $identity['nin']['report_id'] ?? null,
-                'bvn_verification_report_id' => $identity['bvn']['report_id'] ?? null,
-                'nin_verification_status' => ($identity['nin']['success'] ?? false) ? 'success' : 'failed',
-                'bvn_verification_status' => ($identity['bvn']['success'] ?? false) ? 'success' : 'failed',
-                'nin_verification_data' => $identity['nin']['data'] ?? null,
-                'bvn_verification_data' => $identity['bvn']['data'] ?? null,
-                'identity_verified_at' => now(),
                 'status' => 'pending',
             ];
+
+            // Only call CheckMyNinBvn when NIN/BVN are new or changed (avoids repeat API cost).
+            if ($needsIdentityVerification) {
+                $identity = $this->verifyIdentityWithProvider($nin, $bvn, $existing);
+                if (!$identity['success']) {
+                    return [
+                        'success' => false,
+                        'message' => $identity['message'],
+                    ];
+                }
+
+                if (array_key_exists('nin', $identity) && !empty($identity['nin'])) {
+                    $kycData['nin_verification_report_id'] = $identity['nin']['report_id'] ?? null;
+                    $kycData['nin_verification_status'] = ($identity['nin']['success'] ?? false) ? 'success' : 'failed';
+                    $kycData['nin_verification_data'] = $identity['nin']['data'] ?? null;
+                }
+                if (array_key_exists('bvn', $identity) && !empty($identity['bvn'])) {
+                    $kycData['bvn_verification_report_id'] = $identity['bvn']['report_id'] ?? null;
+                    $kycData['bvn_verification_status'] = ($identity['bvn']['success'] ?? false) ? 'success' : 'failed';
+                    $kycData['bvn_verification_data'] = $identity['bvn']['data'] ?? null;
+                }
+                $kycData['identity_verified_at'] = now();
+            }
 
             $kyc = Kyc::updateOrCreate(
                 ['user_id' => $userId],
@@ -144,15 +155,52 @@ class KycService
     }
 
     /**
+     * Call the provider only on first successful verify, or when NIN/BVN change.
+     */
+    protected function shouldVerifyIdentity(?Kyc $existing, string $nin, string $bvn): bool
+    {
+        if (!$existing) {
+            return true;
+        }
+
+        $sameNin = trim((string) $existing->nin_number) === $nin;
+        $sameBvn = trim((string) $existing->bvn_number) === $bvn;
+        $alreadyVerified =
+            strtolower((string) $existing->nin_verification_status) === 'success'
+            && strtolower((string) $existing->bvn_verification_status) === 'success';
+
+        // Reuse stored verification when numbers are unchanged and already verified.
+        if ($sameNin && $sameBvn && $alreadyVerified) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Verify NIN + BVN with CheckMyNinBvn.
+     * Reuses a previously successful result when that number did not change.
      *
      * @return array{success: bool, message: string, nin: array, bvn: array}
      */
-    protected function verifyIdentityWithProvider(string $nin, string $bvn): array
+    protected function verifyIdentityWithProvider(string $nin, string $bvn, ?Kyc $existing = null): array
     {
         $client = CheckMyNinBvnClient::fromConfig();
 
-        $ninResult = $client->verifyNin($nin);
+        $sameNin = $existing && trim((string) $existing->nin_number) === $nin;
+        $sameBvn = $existing && trim((string) $existing->bvn_number) === $bvn;
+        $ninOk = $sameNin && strtolower((string) $existing->nin_verification_status) === 'success';
+        $bvnOk = $sameBvn && strtolower((string) $existing->bvn_verification_status) === 'success';
+
+        $ninResult = $ninOk
+            ? [
+                'success' => true,
+                'report_id' => $existing->nin_verification_report_id,
+                'message' => 'Reused previous NIN verification',
+                'data' => $existing->nin_verification_data,
+            ]
+            : $client->verifyNin($nin);
+
         if (!$ninResult['success']) {
             return [
                 'success' => false,
@@ -162,7 +210,15 @@ class KycService
             ];
         }
 
-        $bvnResult = $client->verifyBvn($bvn);
+        $bvnResult = $bvnOk
+            ? [
+                'success' => true,
+                'report_id' => $existing->bvn_verification_report_id,
+                'message' => 'Reused previous BVN verification',
+                'data' => $existing->bvn_verification_data,
+            ]
+            : $client->verifyBvn($bvn);
+
         if (!$bvnResult['success']) {
             return [
                 'success' => false,
