@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\Kyc;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 class KycService
 {
@@ -117,6 +119,52 @@ class KycService
     public function getKyc(int $userId): ?Kyc
     {
         return Kyc::where('user_id', $userId)->first();
+    }
+
+    /**
+     * Upload face verification video for KYC
+     */
+    public function uploadFaceVerificationVideo(int $userId, UploadedFile $file): array
+    {
+        try {
+            $kyc = Kyc::where('user_id', $userId)->first();
+
+            if (!$kyc) {
+                return [
+                    'success' => false,
+                    'message' => 'Please submit your KYC information before face verification.',
+                ];
+            }
+
+            $disk = 'local';
+
+            if ($kyc->face_verification_video_path) {
+                Storage::disk($kyc->face_verification_video_disk ?? $disk)
+                    ->delete($kyc->face_verification_video_path);
+            }
+
+            $path = $file->store("kyc/{$userId}/face-verification", $disk);
+
+            $kyc->update([
+                'face_verification_video_path' => $path,
+                'face_verification_video_disk' => $disk,
+                'face_verification_submitted_at' => now(),
+                'status' => 'pending',
+            ]);
+
+            return [
+                'success' => true,
+                'message' => 'Face verification video uploaded successfully',
+                'kyc' => $kyc->fresh(),
+            ];
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => config('app.debug')
+                    ? "Error: {$e->getMessage()}"
+                    : 'An error occurred while uploading face verification video. Please try again.',
+            ];
+        }
     }
 
     /**

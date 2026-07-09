@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Kyc\SubmitKycRequest;
+use App\Http\Requests\Kyc\UploadFaceVerificationRequest;
 use App\Services\KycService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -109,6 +110,37 @@ class KycController extends Controller
             $message = config('app.debug') 
                 ? "Error: {$e->getMessage()} (File: {$e->getFile()}, Line: {$e->getLine()})" 
                 : 'An error occurred while retrieving KYC information. Please try again.';
+
+            return ResponseHelper::error($message, 500);
+        }
+    }
+
+    /**
+     * Upload face verification video
+     */
+    public function uploadFaceVerification(UploadFaceVerificationRequest $request): JsonResponse
+    {
+        try {
+            $result = $this->kycService->uploadFaceVerificationVideo(
+                $request->user()->id,
+                $request->file('face_verification_video')
+            );
+
+            if (!$result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Face verification upload failed', 400);
+            }
+
+            return ResponseHelper::success($result, $result['message'] ?? 'Face verification video uploaded successfully.');
+        } catch (\Exception $e) {
+            Log::error('Face verification upload error: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $message = config('app.debug')
+                ? "Error: {$e->getMessage()}"
+                : 'An error occurred while uploading face verification video. Please try again.';
 
             return ResponseHelper::error($message, 500);
         }

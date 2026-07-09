@@ -191,6 +191,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     // ========================================================================
     Route::prefix('kyc')->group(function () {
         Route::post('/', [KycController::class, 'submit']);
+        Route::post('/face-verification', [KycController::class, 'uploadFaceVerification']);
         Route::get('/', [KycController::class, 'get']);
     });
 
