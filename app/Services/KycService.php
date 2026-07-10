@@ -204,7 +204,7 @@ class KycService
         if (!$ninResult['success']) {
             return [
                 'success' => false,
-                'message' => $ninResult['message'] ?: 'NIN verification failed. Please check the NIN and try again.',
+                'message' => $this->friendlyIdentityErrorMessage('NIN', (string) ($ninResult['message'] ?? '')),
                 'nin' => $ninResult,
                 'bvn' => [],
             ];
@@ -222,7 +222,7 @@ class KycService
         if (!$bvnResult['success']) {
             return [
                 'success' => false,
-                'message' => $bvnResult['message'] ?: 'BVN verification failed. Please check the BVN and try again.',
+                'message' => $this->friendlyIdentityErrorMessage('BVN', (string) ($bvnResult['message'] ?? '')),
                 'nin' => $ninResult,
                 'bvn' => $bvnResult,
             ];
@@ -234,6 +234,30 @@ class KycService
             'nin' => $ninResult,
             'bvn' => $bvnResult,
         ];
+    }
+
+    /**
+     * Map provider errors (e.g. "No record found/Invalid Input") to clear user-facing copy.
+     */
+    protected function friendlyIdentityErrorMessage(string $field, string $providerMessage): string
+    {
+        $lower = strtolower($providerMessage);
+
+        $looksInvalid =
+            $providerMessage === ''
+            || str_contains($lower, 'no record')
+            || str_contains($lower, 'invalid')
+            || str_contains($lower, 'not found')
+            || str_contains($lower, 'incorrect')
+            || str_contains($lower, 'does not match')
+            || str_contains($lower, 'failed');
+
+        if ($looksInvalid) {
+            return "Your {$field} is not correct. Please check the number and try again.";
+        }
+
+        // Keep rare provider/system messages (e.g. balance/timeout) readable.
+        return $providerMessage;
     }
 
     /**
