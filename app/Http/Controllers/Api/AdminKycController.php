@@ -9,6 +9,8 @@ use App\Models\User;
 use App\Services\Admin\AdminKycService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminKycController extends Controller
 {
@@ -78,6 +80,34 @@ class AdminKycController extends Controller
             'user' => $user,
             'kyc' => $kyc,
         ], 'KYC retrieved.');
+    }
+
+    /**
+     * Stream the user's face verification video for admin review.
+     */
+    public function faceVideo(User $user): StreamedResponse|JsonResponse
+    {
+        $kyc = Kyc::query()->where('user_id', $user->id)->first();
+
+        if (!$kyc || empty($kyc->face_verification_video_path)) {
+            return ResponseHelper::error('Face verification video not found.', 404);
+        }
+
+        $disk = $kyc->face_verification_video_disk ?: 'local';
+        $path = $kyc->face_verification_video_path;
+
+        if (!Storage::disk($disk)->exists($path)) {
+            return ResponseHelper::error('Face verification video file is missing.', 404);
+        }
+
+        $mime = Storage::disk($disk)->mimeType($path) ?: 'video/mp4';
+        $filename = basename($path);
+
+        return Storage::disk($disk)->response($path, $filename, [
+            'Content-Type' => $mime,
+            'Content-Disposition' => 'inline; filename="'.$filename.'"',
+            'Cache-Control' => 'private, max-age=60',
+        ]);
     }
 
     public function approve(Request $request, User $user): JsonResponse

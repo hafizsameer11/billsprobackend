@@ -277,6 +277,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
 
         Route::get('/kyc', [AdminKycController::class, 'index']);
         Route::get('/kyc/{user}', [AdminKycController::class, 'show']);
+        Route::get('/kyc/{user}/face-video', [AdminKycController::class, 'faceVideo']);
         Route::post('/kyc/{user}/approve', [AdminKycController::class, 'approve']);
         Route::post('/kyc/{user}/reject', [AdminKycController::class, 'reject']);
 
