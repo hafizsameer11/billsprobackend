@@ -137,7 +137,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/{reference}', [DepositController::class, 'show']);
     });
 
-    Route::prefix('bill-payment/palmpay')->group(function () {
+    Route::prefix('bill-payment/palmpay')->middleware('kyc.approved')->group(function () {
         Route::get('/billers', [PalmPayBillPaymentController::class, 'billers']);
         Route::get('/items', [PalmPayBillPaymentController::class, 'items']);
         Route::post('/verify-account', [PalmPayBillPaymentController::class, 'verifyAccount']);
@@ -145,9 +145,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     });
 
     // ========================================================================
-    // WITHDRAWAL ROUTES
+    // WITHDRAWAL ROUTES (requires approved KYC)
     // ========================================================================
-    Route::prefix('withdrawal')->group(function () {
+    Route::prefix('withdrawal')->middleware('kyc.approved')->group(function () {
         // Bank account management
         Route::get('/bank-accounts', [WithdrawalController::class, 'getBankAccounts']);
         Route::post('/bank-accounts', [WithdrawalController::class, 'addBankAccount']);
@@ -196,9 +196,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     });
 
     // ========================================================================
-    // BILL PAYMENT ROUTES
+    // BILL PAYMENT ROUTES (requires approved KYC)
     // ========================================================================
-    Route::prefix('bill-payment')->group(function () {
+    Route::prefix('bill-payment')->middleware('kyc.approved')->group(function () {
         // Categories and Providers
         Route::get('/categories', [BillPaymentController::class, 'getCategories']);
         Route::get('/providers', [BillPaymentController::class, 'getProviders']);
@@ -380,23 +380,23 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         // Exchange Rate
         Route::get('/exchange-rate', [CryptoController::class, 'getExchangeRate']);
 
-        // Buy Crypto
-        Route::post('/buy/preview', [CryptoController::class, 'previewBuyCrypto']);
-        Route::post('/buy/confirm', [CryptoController::class, 'confirmBuyCrypto']);
+        // Buy / Sell / Send require approved KYC (receive/deposit-address stay open)
+        Route::middleware('kyc.approved')->group(function () {
+            Route::post('/buy/preview', [CryptoController::class, 'previewBuyCrypto']);
+            Route::post('/buy/confirm', [CryptoController::class, 'confirmBuyCrypto']);
 
-        // Sell Crypto
-        Route::post('/sell/preview', [CryptoController::class, 'previewSellCrypto']);
-        Route::post('/sell/confirm', [CryptoController::class, 'confirmSellCrypto']);
+            Route::post('/sell/preview', [CryptoController::class, 'previewSellCrypto']);
+            Route::post('/sell/confirm', [CryptoController::class, 'confirmSellCrypto']);
 
-        // Send Crypto (Withdrawal)
-        Route::get('/send/fee-preview', [CryptoController::class, 'previewSendFee']);
-        Route::post('/send', [CryptoController::class, 'sendCrypto']);
+            Route::get('/send/fee-preview', [CryptoController::class, 'previewSendFee']);
+            Route::post('/send', [CryptoController::class, 'sendCrypto']);
+        });
     });
 
     // ========================================================================
-    // VIRTUAL CARD ROUTES (Visa — register before `virtual-cards/{id}` so `visa-card` is not captured as id)
+    // VIRTUAL CARD ROUTES (Visa — requires approved KYC)
     // ========================================================================
-    Route::prefix('virtual-cards/visa-card')->group(function () {
+    Route::prefix('virtual-cards/visa-card')->middleware('kyc.approved')->group(function () {
         Route::get('/creation-fee', [VisaVirtualCardController::class, 'creationFee']);
         Route::get('/funding-estimate', [VisaVirtualCardController::class, 'fundingEstimate']);
         Route::get('/', [VisaVirtualCardController::class, 'index']);
@@ -409,9 +409,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
     });
 
     // ========================================================================
-    // VIRTUAL CARD ROUTES (Mastercard / shared list)
+    // VIRTUAL CARD ROUTES (Mastercard / shared list — requires approved KYC)
     // ========================================================================
-    Route::prefix('virtual-cards')->group(function () {
+    Route::prefix('virtual-cards')->middleware('kyc.approved')->group(function () {
         Route::get('/pending-provider-events', [VirtualCardController::class, 'pendingProviderEvents']);
         Route::post('/provider-events/{providerEvent}/dismiss', [VirtualCardController::class, 'dismissProviderEvent']);
         Route::get('/', [VirtualCardController::class, 'index']);
