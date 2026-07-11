@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Helpers\ResponseHelper;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -9,6 +10,9 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Blocks money-moving / spend actions until KYC is approved.
  * Deposits, crypto receive, auth, profile, and KYC itself stay ungated.
+ *
+ * Response shape matches ResponseHelper::error so the mobile app can show
+ * error.message / error.response.data.message in alerts.
  */
 class EnsureKycApproved
 {
@@ -27,28 +31,34 @@ class EnsureKycApproved
         }
 
         if ($status === 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Your KYC is pending approval. Please wait until it is approved before continuing.',
-                'code' => 'KYC_PENDING',
-                'kyc_status' => 'pending',
-            ], 403);
+            return ResponseHelper::error(
+                'Your KYC is pending approval. Please wait until it is approved before continuing.',
+                400,
+                [
+                    'code' => 'KYC_PENDING',
+                    'kyc_status' => 'pending',
+                ]
+            );
         }
 
         if ($status === 'rejected') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Your KYC was rejected. Please update your KYC and submit again before continuing.',
-                'code' => 'KYC_REJECTED',
-                'kyc_status' => 'rejected',
-            ], 403);
+            return ResponseHelper::error(
+                'Your KYC was rejected. Please update your KYC and submit again before continuing.',
+                400,
+                [
+                    'code' => 'KYC_REJECTED',
+                    'kyc_status' => 'rejected',
+                ]
+            );
         }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Please complete KYC verification first before continuing.',
-            'code' => 'KYC_REQUIRED',
-            'kyc_status' => 'missing',
-        ], 403);
+        return ResponseHelper::error(
+            'Please complete KYC verification first before continuing.',
+            400,
+            [
+                'code' => 'KYC_REQUIRED',
+                'kyc_status' => 'missing',
+            ]
+        );
     }
 }
