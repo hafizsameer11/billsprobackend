@@ -2,6 +2,7 @@
 
 namespace App\Services\PalmPay;
 
+use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Services\Admin\TransactionPricingSnapshotService;
 use App\Models\Deposit;
@@ -267,7 +268,7 @@ class PalmPayDepositService
                     $user,
                     'deposit',
                     'Wallet Top Up Successful',
-                    "Your {$currency} wallet was credited with {$currency} {$creditAmount}.",
+                    'Your '.$currency.' wallet was credited with '.MoneyFormatHelper::format($creditAmount, $currency).'.',
                     [
                         'deposit_reference' => $deposit->deposit_reference,
                         'amount' => (float) $creditAmount,

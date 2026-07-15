@@ -2,6 +2,7 @@
 
 namespace App\Services\Deposit;
 
+use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Models\BankAccount;
 use App\Models\Deposit;
@@ -163,7 +164,7 @@ class DepositService
                     $user,
                     'deposit',
                     'Wallet Top Up Successful',
-                    "Your {$deposit->currency} wallet was credited with {$deposit->currency} {$deposit->amount}.",
+                    'Your '.$deposit->currency.' wallet was credited with '.MoneyFormatHelper::format($deposit->amount, $deposit->currency).'.',
                     [
                         'deposit_reference' => $deposit->deposit_reference,
                         'amount' => $deposit->amount,

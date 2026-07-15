@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Concerns\VerifiesTransactionPin;
@@ -179,7 +180,7 @@ class VisaVirtualCardController extends Controller
                     $request->user(),
                     'virtual_card',
                     'Visa Virtual Card Funded',
-                    $amount ? "Your Visa virtual card was funded with USD {$amount}." : 'Your Visa virtual card was funded successfully.',
+                    $amount ? 'Your Visa virtual card was funded with '.MoneyFormatHelper::format($amount, 'USD').'.' : 'Your Visa virtual card was funded successfully.',
                     ['action' => 'fund_visa_card', 'amount' => $amount]
                 );
             } catch (\Throwable $e) {

@@ -2,6 +2,7 @@
 
 namespace App\Services\BillPayment;
 
+use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Models\Beneficiary;
 use App\Models\BillPaymentCategory;
@@ -486,7 +487,7 @@ class BillPaymentService
                     $user,
                     'bill_payment',
                     'Bill Payment Successful',
-                    "Your {$categoryName} payment of {$transaction->currency} {$transaction->amount} was successful.",
+                    'Your '.$categoryName.' payment of '.MoneyFormatHelper::format($transaction->amount, $transaction->currency).' was successful.',
                     [
                         'transaction_id' => $transaction->transaction_id,
                         'category' => $metadata['categoryCode'] ?? null,

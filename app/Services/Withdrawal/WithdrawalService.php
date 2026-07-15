@@ -2,6 +2,7 @@
 
 namespace App\Services\Withdrawal;
 
+use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Models\BankAccount;
 use App\Models\FiatWallet;
@@ -399,7 +400,7 @@ class WithdrawalService
                     $user,
                     'withdrawal',
                     'Withdrawal Update',
-                    "Your withdrawal of NGN {$amount} to {$normalizedAccount} has been {$statusText}.",
+                    'Your withdrawal of '.MoneyFormatHelper::format($amount, 'NGN')." to {$normalizedAccount} has been {$statusText}.",
                     [
                         'transaction_id' => $transaction->transaction_id,
                         'amount' => $amount,
@@ -519,7 +520,7 @@ class WithdrawalService
                 $user,
                 'withdrawal',
                 'Withdrawal Successful',
-                "Your withdrawal of NGN {$amount} to {$bankAccount->account_number} was successful.",
+                'Your withdrawal of '.MoneyFormatHelper::format($amount, 'NGN')." to {$bankAccount->account_number} was successful.",
                 [
                     'transaction_id' => $transaction->transaction_id,
                     'amount' => $amount,
@@ -690,7 +691,7 @@ class WithdrawalService
                     $user,
                     'withdrawal',
                     'Withdrawal Update',
-                    "Your withdrawal of NGN {$amount} to {$bankAccount->account_number} has been {$statusText}.",
+                    'Your withdrawal of '.MoneyFormatHelper::format($amount, 'NGN')." to {$bankAccount->account_number} has been {$statusText}.",
                     [
                         'transaction_id' => $transaction->transaction_id,
                         'amount' => $amount,
