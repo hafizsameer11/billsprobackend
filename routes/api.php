@@ -141,16 +141,13 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/billers', [PalmPayBillPaymentController::class, 'billers']);
         Route::get('/items', [PalmPayBillPaymentController::class, 'items']);
         Route::post('/verify-account', [PalmPayBillPaymentController::class, 'verifyAccount']);
-        // Money movement — KYC required
-        Route::post('/create-order', [PalmPayBillPaymentController::class, 'createOrder'])
-            ->middleware('kyc.approved');
+        Route::post('/create-order', [PalmPayBillPaymentController::class, 'createOrder']);
     });
 
     // ========================================================================
     // WITHDRAWAL ROUTES
     // ========================================================================
     Route::prefix('withdrawal')->group(function () {
-        // Bank account management (read/setup allowed without KYC)
         Route::get('/bank-accounts', [WithdrawalController::class, 'getBankAccounts']);
         Route::post('/bank-accounts', [WithdrawalController::class, 'addBankAccount']);
         Route::put('/bank-accounts/{id}', [WithdrawalController::class, 'updateBankAccount']);
@@ -160,12 +157,8 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/fee', [WithdrawalController::class, 'getWithdrawalFee']);
         Route::get('/palmpay/banks', [WithdrawalController::class, 'getPalmPayBanks']);
         Route::post('/palmpay/verify-account', [WithdrawalController::class, 'verifyPalmPayAccount']);
-
-        // Money movement — KYC required
-        Route::middleware('kyc.approved')->group(function () {
-            Route::post('/palmpay/initiate', [WithdrawalController::class, 'initiatePalmPayWithdrawal']);
-            Route::post('/', [WithdrawalController::class, 'withdraw']);
-        });
+        Route::post('/palmpay/initiate', [WithdrawalController::class, 'initiatePalmPayWithdrawal']);
+        Route::post('/', [WithdrawalController::class, 'withdraw']);
 
         Route::get('/transactions', [WithdrawalController::class, 'getTransactionHistory']);
         Route::get('/transactions/{transactionId}', [WithdrawalController::class, 'getTransaction']);
@@ -214,12 +207,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::put('/beneficiaries/{id}', [BillPaymentController::class, 'updateBeneficiary']);
         Route::delete('/beneficiaries/{id}', [BillPaymentController::class, 'deleteBeneficiary']);
 
-        // Money movement — KYC required
-        Route::middleware('kyc.approved')->group(function () {
-            Route::post('/preview', [BillPaymentController::class, 'preview']);
-            Route::post('/initiate', [BillPaymentController::class, 'initiate']);
-            Route::post('/confirm', [BillPaymentController::class, 'confirm']);
-        });
+        Route::post('/preview', [BillPaymentController::class, 'preview']);
+        Route::post('/initiate', [BillPaymentController::class, 'initiate']);
+        Route::post('/confirm', [BillPaymentController::class, 'confirm']);
     });
 
     // ========================================================================
@@ -382,13 +372,13 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         // Exchange Rate
         Route::get('/exchange-rate', [CryptoController::class, 'getExchangeRate']);
 
-        // Previews allowed; confirm/send require approved KYC
         Route::post('/buy/preview', [CryptoController::class, 'previewBuyCrypto']);
+        Route::post('/buy/confirm', [CryptoController::class, 'confirmBuyCrypto']);
         Route::post('/sell/preview', [CryptoController::class, 'previewSellCrypto']);
         Route::get('/send/fee-preview', [CryptoController::class, 'previewSendFee']);
 
+        // KYC required only for crypto sell + send (receive stays open)
         Route::middleware('kyc.approved')->group(function () {
-            Route::post('/buy/confirm', [CryptoController::class, 'confirmBuyCrypto']);
             Route::post('/sell/confirm', [CryptoController::class, 'confirmSellCrypto']);
             Route::post('/send', [CryptoController::class, 'sendCrypto']);
         });
@@ -401,16 +391,12 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/creation-fee', [VisaVirtualCardController::class, 'creationFee']);
         Route::get('/funding-estimate', [VisaVirtualCardController::class, 'fundingEstimate']);
         Route::get('/', [VisaVirtualCardController::class, 'index']);
+        Route::post('/', [VisaVirtualCardController::class, 'create']);
         Route::get('/{id}', [VisaVirtualCardController::class, 'show'])->whereNumber('id');
+        Route::post('/{id}/fund', [VisaVirtualCardController::class, 'fund'])->whereNumber('id');
         Route::get('/{id}/transactions', [VisaVirtualCardController::class, 'transactions'])->whereNumber('id');
-
-        // Money movement / card actions — KYC required
-        Route::middleware('kyc.approved')->group(function () {
-            Route::post('/', [VisaVirtualCardController::class, 'create']);
-            Route::post('/{id}/fund', [VisaVirtualCardController::class, 'fund'])->whereNumber('id');
-            Route::post('/{id}/freeze', [VisaVirtualCardController::class, 'freeze'])->whereNumber('id');
-            Route::post('/{id}/unfreeze', [VisaVirtualCardController::class, 'unfreeze'])->whereNumber('id');
-        });
+        Route::post('/{id}/freeze', [VisaVirtualCardController::class, 'freeze'])->whereNumber('id');
+        Route::post('/{id}/unfreeze', [VisaVirtualCardController::class, 'unfreeze'])->whereNumber('id');
     });
 
     // ========================================================================
@@ -422,26 +408,22 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/', [VirtualCardController::class, 'index']);
         Route::get('/funding-estimate', [VirtualCardController::class, 'fundingEstimate']);
         Route::get('/creation-fee', [VirtualCardController::class, 'creationFee']);
+        Route::post('/', [VirtualCardController::class, 'create']);
         Route::get('/{id}', [VirtualCardController::class, 'show']);
+        Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);
+        Route::post('/{id}/withdraw', [VirtualCardController::class, 'withdraw']);
         Route::get('/{id}/transactions', [VirtualCardController::class, 'transactions']);
+        Route::post('/{id}/terminate', [VirtualCardController::class, 'terminate']);
         Route::get('/{id}/check-3ds', [VirtualCardController::class, 'check3ds']);
         Route::get('/{id}/check-wallet', [VirtualCardController::class, 'checkWallet']);
+        Route::post('/{id}/approve-3ds', [VirtualCardController::class, 'approve3ds']);
         Route::get('/{id}/spend-controls', [VirtualCardController::class, 'listSpendControls']);
+        Route::post('/{id}/spend-controls', [VirtualCardController::class, 'createSpendControl']);
+        Route::post('/{id}/delete-spend-control', [VirtualCardController::class, 'deleteSpendControl']);
         Route::get('/{id}/billing-address', [VirtualCardController::class, 'getBillingAddress']);
-
-        // Money movement / card actions — KYC required
-        Route::middleware('kyc.approved')->group(function () {
-            Route::post('/', [VirtualCardController::class, 'create']);
-            Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);
-            Route::post('/{id}/withdraw', [VirtualCardController::class, 'withdraw']);
-            Route::post('/{id}/terminate', [VirtualCardController::class, 'terminate']);
-            Route::post('/{id}/approve-3ds', [VirtualCardController::class, 'approve3ds']);
-            Route::post('/{id}/spend-controls', [VirtualCardController::class, 'createSpendControl']);
-            Route::post('/{id}/delete-spend-control', [VirtualCardController::class, 'deleteSpendControl']);
-            Route::put('/{id}/billing-address', [VirtualCardController::class, 'updateBillingAddress']);
-            Route::post('/{id}/freeze', [VirtualCardController::class, 'freeze']);
-            Route::post('/{id}/unfreeze', [VirtualCardController::class, 'unfreeze']);
-        });
+        Route::put('/{id}/billing-address', [VirtualCardController::class, 'updateBillingAddress']);
+        Route::post('/{id}/freeze', [VirtualCardController::class, 'freeze']);
+        Route::post('/{id}/unfreeze', [VirtualCardController::class, 'unfreeze']);
     });
 
     // ========================================================================

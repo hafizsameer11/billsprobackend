@@ -8,8 +8,8 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Blocks money-moving / spend actions until KYC is approved.
- * Deposits, crypto receive, auth, profile, and KYC itself stay ungated.
+ * Blocks crypto sell/send until KYC is approved.
+ * Receive crypto, deposits, bills, cards, withdrawals stay ungated.
  *
  * Response shape matches ResponseHelper::error so the mobile app can show
  * error.message / error.response.data.message in alerts.
