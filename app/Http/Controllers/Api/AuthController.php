@@ -309,7 +309,9 @@ class AuthController extends Controller
             $result = $this->authService->login($request->email, $request->password);
 
             if (!$result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Login failed', 400);
+                $errors = isset($result['code']) ? ['code' => $result['code']] : null;
+
+                return ResponseHelper::error($result['message'] ?? 'Login failed', 400, $errors);
             }
 
             return ResponseHelper::success([

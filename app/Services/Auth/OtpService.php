@@ -50,30 +50,41 @@ class OtpService
             'expires_at' => $expiresAt,
         ]);
 
-        // Send OTP via email or SMS
+        // Send OTP via email or SMS.
+        // Email is dispatched after the HTTP response so signup/login never hangs
+        // on slow SMTP / unreachable mailboxes ("loads forever" on the app).
         try {
             if ($type === 'email' && $email) {
-                // Send email with appropriate template
-                Mail::to($email)->send(new OtpVerificationMail($otp, $emailType, 5));
-                
-                Log::info("OTP email sent successfully to: {$email}", [
-                    'email_type' => $emailType,
-                ]);
+                $mailEmail = $email;
+                $mailOtp = $otp;
+                $mailType = $emailType;
+
+                dispatch(function () use ($mailEmail, $mailOtp, $mailType) {
+                    try {
+                        Mail::to($mailEmail)->send(new OtpVerificationMail($mailOtp, $mailType, 5));
+                        Log::info("OTP email sent successfully to: {$mailEmail}", [
+                            'email_type' => $mailType,
+                        ]);
+                    } catch (\Throwable $e) {
+                        Log::error('Failed to send OTP email after response: '.$e->getMessage(), [
+                            'email' => $mailEmail,
+                            'email_type' => $mailType,
+                            'trace' => $e->getTraceAsString(),
+                        ]);
+                    }
+                })->afterResponse();
             } elseif ($type === 'phone' && $phoneNumber) {
                 // TODO: Integrate with SMS service (Twilio, etc.)
                 Log::info("OTP SMS should be sent to: {$phoneNumber} (SMS service not integrated yet)");
             }
         } catch (\Exception $e) {
-            Log::error("Failed to send OTP: " . $e->getMessage(), [
+            Log::error("Failed to queue OTP send: " . $e->getMessage(), [
                 'email' => $email,
                 'phone' => $phoneNumber,
                 'type' => $type,
                 'email_type' => $emailType,
                 'trace' => $e->getTraceAsString(),
             ]);
-            
-            // Still return success as OTP is generated and stored
-            // The user can request a resend if email fails
         }
 
         return [

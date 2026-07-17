@@ -307,6 +307,7 @@ class AuthService
             return [
                 'success' => false,
                 'message' => 'Please verify your email before logging in',
+                'code' => 'EMAIL_NOT_VERIFIED',
             ];
         }
 
