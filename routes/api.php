@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\AdminWalletUsersController;
 use App\Http\Controllers\Api\AdminWebhookController;
 use App\Http\Controllers\Api\AdminWithdrawalController;
 use App\Http\Controllers\Api\AdminLegalDocumentController;
+use App\Http\Controllers\Api\AppVersionController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\LegalDocumentController;
 use App\Http\Controllers\Api\BillPaymentController;
@@ -68,6 +69,7 @@ use Illuminate\Support\Facades\Route;
 /** In-app legal copy (registration, virtual cards, etc.) — public, no auth */
 Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
 Route::get('/service-maintenance', [ServiceMaintenanceController::class, 'index']);
+Route::get('/app-version', [AppVersionController::class, 'show']);
 
 Route::prefix('auth')->middleware('throttle:10,1')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
