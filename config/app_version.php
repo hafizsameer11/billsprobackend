@@ -13,10 +13,10 @@ return [
     | Bump these when you ship a mandatory native build (not for OTA-only fixes).
     |
     */
-    'min_version_android' => (string) env('APP_MIN_VERSION_ANDROID', '1.2.0'),
-    'min_version_ios' => (string) env('APP_MIN_VERSION_IOS', '1.2.0'),
-    'latest_version_android' => (string) env('APP_LATEST_VERSION_ANDROID', '1.2.3'),
-    'latest_version_ios' => (string) env('APP_LATEST_VERSION_IOS', '1.2.3'),
+    'min_version_android' => (string) env('APP_MIN_VERSION_ANDROID', '1.2.4'),
+    'min_version_ios' => (string) env('APP_MIN_VERSION_IOS', '1.2.4'),
+    'latest_version_android' => (string) env('APP_LATEST_VERSION_ANDROID', '1.2.4'),
+    'latest_version_ios' => (string) env('APP_LATEST_VERSION_IOS', '1.2.4'),
     'android_store_url' => (string) env(
         'APP_ANDROID_STORE_URL',
         'https://play.google.com/store/apps/details?id=com.pejul.billspro'
