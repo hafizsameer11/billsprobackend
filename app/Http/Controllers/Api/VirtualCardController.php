@@ -63,7 +63,15 @@ class VirtualCardController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $cards = $this->virtualCardService->getUserCards($request->user()->id);
+            $userId = (int) $request->user()->id;
+            $this->virtualCardService->getUserCards($userId);
+            // Pagocards list balances can lag after spend — refresh via getcarddetails.
+            $this->virtualCardService->refreshBalancesForUser($userId);
+            $cards = \App\Models\VirtualCard::query()
+                ->where('user_id', $userId)
+                ->where('is_active', true)
+                ->orderByDesc('created_at')
+                ->get();
 
             return ResponseHelper::success($cards, 'Virtual cards retrieved successfully.');
         } catch (\Exception $e) {

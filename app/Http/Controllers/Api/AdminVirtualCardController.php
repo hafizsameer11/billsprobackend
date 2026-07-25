@@ -31,6 +31,8 @@ class AdminVirtualCardController extends Controller
     {
         try {
             $this->virtualCardService->getUserCards((int) $user->id);
+            // List APIs can return incomplete balances after spend — refresh via getcarddetails.
+            $this->virtualCardService->refreshBalancesForUser((int) $user->id);
         } catch (\Throwable) {
             // Fall back to cached DB rows if provider sync fails.
         }
@@ -121,6 +123,12 @@ class AdminVirtualCardController extends Controller
      */
     public function summary(): JsonResponse
     {
+        try {
+            $this->virtualCardService->refreshStaleBalancesFromProvider(40, 120);
+        } catch (\Throwable) {
+            // Keep cached aggregates if provider sync fails.
+        }
+
         $totalCards = VirtualCard::query()->count();
         $totalBalance = (float) VirtualCard::query()->sum('balance');
         $usersWithCards = (int) VirtualCard::query()
@@ -142,6 +150,13 @@ class AdminVirtualCardController extends Controller
      */
     public function usersOverview(Request $request): JsonResponse
     {
+        try {
+            // Admin list previously read stale DB balances; refresh spend-affected cards first.
+            $this->virtualCardService->refreshStaleBalancesFromProvider(40, 120);
+        } catch (\Throwable) {
+            // Keep cached aggregates if provider sync fails.
+        }
+
         $perPage = min(100, max(1, (int) $request->query('per_page', 25)));
         $status = (string) $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));

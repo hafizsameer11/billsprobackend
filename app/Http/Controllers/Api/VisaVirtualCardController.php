@@ -10,8 +10,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
 use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Http\Requests\VirtualCard\FundingEstimateRequest;
+use App\Models\VirtualCard;
 use App\Services\Http\IdempotencyService;
 use App\Services\VirtualCard\VisaVirtualCardService;
+use App\Services\VirtualCard\VirtualCardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -27,6 +29,7 @@ class VisaVirtualCardController extends Controller
 
     public function __construct(
         protected VisaVirtualCardService $visaVirtualCardService,
+        protected VirtualCardService $virtualCardService,
     ) {}
 
     #[OA\Get(path: '/api/virtual-cards/visa-card/creation-fee', summary: 'Visa card creation fee quote', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
@@ -74,7 +77,14 @@ class VisaVirtualCardController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $cards = $this->visaVirtualCardService->getUserCards($request->user()->id);
+            $userId = (int) $request->user()->id;
+            $this->visaVirtualCardService->getUserCards($userId);
+            $this->virtualCardService->refreshBalancesForUser($userId);
+            $cards = VirtualCard::query()
+                ->where('user_id', $userId)
+                ->where('is_active', true)
+                ->orderByDesc('created_at')
+                ->get();
 
             return ResponseHelper::success($cards, 'Virtual cards retrieved successfully.');
         } catch (\Exception $e) {

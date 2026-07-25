@@ -1240,7 +1240,7 @@ class VirtualCardService
      * Re-fetch {@see getMerchantMasterCard} after a successful fund. The fund response often lists a
      * partial field as `balance` while getcarddetails exposes the full card USD balance Pagocards shows.
      */
-    protected function syncCardBalanceWithProviderDetails(int $userId, int $cardId): void
+    public function syncCardBalanceWithProviderDetails(int $userId, int $cardId): void
     {
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
         if (! $card || ! $card->provider_card_id) {
@@ -1267,6 +1267,63 @@ class VirtualCardService
         } catch (MastercardApiException) {
             // keep balance from fund step
         }
+    }
+
+    /**
+     * Pull live Pagocards balances + recent txs for every card belonging to a user.
+     * List endpoints alone can return incomplete balances after merchant spend.
+     */
+    public function refreshBalancesForUser(int $userId): int
+    {
+        $cards = VirtualCard::query()
+            ->where('user_id', $userId)
+            ->whereNotNull('provider_card_id')
+            ->where('is_active', true)
+            ->orderBy('id')
+            ->get();
+
+        $refreshed = 0;
+        foreach ($cards as $card) {
+            try {
+                if ($this->getCard($userId, (int) $card->id)) {
+                    $refreshed++;
+                }
+            } catch (\Throwable) {
+                // keep cached row
+            }
+        }
+
+        return $refreshed;
+    }
+
+    /**
+     * Refresh the stalest active cards from Pagocards (getcarddetails).
+     * Used by admin overview/summary so spend updates show without opening each card.
+     */
+    public function refreshStaleBalancesFromProvider(int $maxCards = 40, int $staleSeconds = 120): int
+    {
+        $cutoff = now()->subSeconds(max(0, $staleSeconds));
+
+        $cards = VirtualCard::query()
+            ->whereNotNull('provider_card_id')
+            ->where('is_active', true)
+            ->where('updated_at', '<', $cutoff)
+            ->orderBy('updated_at')
+            ->limit(max(1, $maxCards))
+            ->get();
+
+        $refreshed = 0;
+        foreach ($cards as $card) {
+            try {
+                if ($this->getCard((int) $card->user_id, (int) $card->id)) {
+                    $refreshed++;
+                }
+            } catch (\Throwable) {
+                // keep cached row
+            }
+        }
+
+        return $refreshed;
     }
 
     /**
@@ -1360,6 +1417,11 @@ class VirtualCardService
                     'virtual_card_id' => $cardId,
                     'provider_card_id' => $card->provider_card_id,
                     'provider_response' => $cardDetailsResponse,
+                ]);
+                $card->update([
+                    'balance' => $this->extractBalance($cardDetailsResponse, (float) $card->balance),
+                    'provider_payload' => $cardDetailsResponse,
+                    'provider_status' => $this->extractStatus($cardDetailsResponse, $card->provider_status),
                 ]);
                 $this->syncProviderTransactions($userId, $cardId, $cardDetailsResponse);
             } catch (MastercardApiException) {
