@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\AdminPlatformRateController;
 use App\Http\Controllers\Api\AdminServiceMaintenanceController;
 use App\Http\Controllers\Api\AdminCommissionController;
 use App\Http\Controllers\Api\AdminProfitController;
+use App\Http\Controllers\Api\AdminReconciliationController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
 use App\Http\Controllers\Api\AdminTransactionController;
@@ -254,6 +255,10 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/profit/settings', [AdminProfitController::class, 'settings']);
         Route::put('/profit/settings/{serviceKey}', [AdminProfitController::class, 'updateSetting']);
         Route::get('/profit/transactions', [AdminProfitController::class, 'transactions']);
+
+        Route::get('/reconciliation/overview', [AdminReconciliationController::class, 'overview']);
+        Route::get('/reconciliation/users', [AdminReconciliationController::class, 'users']);
+        Route::get('/reconciliation/users/{user}', [AdminReconciliationController::class, 'userShow']);
 
         Route::get('/commission/tiers', [AdminCommissionController::class, 'tiers']);
         Route::put('/commission/tiers/{tierKey}', [AdminCommissionController::class, 'updateTier']);
