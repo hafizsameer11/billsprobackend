@@ -161,6 +161,8 @@ class DaybookReportService
         $query = Transaction::query()
             ->with('user:id,name,first_name,last_name,email,phone_number')
             ->whereDate('created_at', $ymd)
+            // Manual adjustments stay in the DB for audit but are not shown on the day book.
+            ->whereNotIn('type', self::NOTE_TYPES)
             ->when($type !== '' && $type !== 'all', fn ($q) => $q->where('type', $type))
             ->when($status !== '' && $status !== 'all', fn ($q) => $q->where('status', $status))
             ->when($search !== '', function ($q) use ($search) {
@@ -365,7 +367,9 @@ class DaybookReportService
      */
     private function people(string $ymd, bool $includeTest): array
     {
-        $active = Transaction::query()->whereDate('created_at', $ymd);
+        $active = Transaction::query()
+            ->whereDate('created_at', $ymd)
+            ->whereNotIn('type', self::NOTE_TYPES);
         if (! $includeTest) {
             $active->whereIn('user_id', $this->realUserIdsQuery());
         }
@@ -391,7 +395,8 @@ class DaybookReportService
     {
         $query = Transaction::query()
             ->where('currency', 'NGN')
-            ->whereDate('created_at', $ymd);
+            ->whereDate('created_at', $ymd)
+            ->whereNotIn('type', self::NOTE_TYPES);
         if (! $includeTest) {
             $query->whereIn('user_id', $this->realUserIdsQuery());
         }
@@ -457,6 +462,7 @@ class DaybookReportService
     private function hourly(string $ymd, bool $includeTest): array
     {
         $rows = $this->nairaDayQuery($ymd, $includeTest)
+            ->whereNotIn('type', self::NOTE_TYPES)
             ->selectRaw('HOUR(created_at) as h, COUNT(*) as cnt')
             ->selectRaw('COALESCE(SUM(CASE WHEN type IN (\''.implode("','", self::CREDIT_TYPES).'\') THEN amount ELSE 0 END), 0) as money_in')
             ->selectRaw('COALESCE(SUM(CASE WHEN type IN (\''.implode("','", self::DEBIT_TYPES).'\') THEN total_amount ELSE 0 END), 0) as money_out')
@@ -526,7 +532,8 @@ class DaybookReportService
             ->with('user:id,name,first_name,last_name,email,phone_number')
             ->where('status', 'completed')
             ->where('currency', 'NGN')
-            ->whereDate('created_at', $ymd);
+            ->whereDate('created_at', $ymd)
+            ->whereNotIn('type', self::NOTE_TYPES);
         if (! $includeTest) {
             $query->whereIn('user_id', $this->realUserIdsQuery());
         }
