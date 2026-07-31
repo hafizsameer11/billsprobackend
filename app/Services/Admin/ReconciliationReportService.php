@@ -20,6 +20,14 @@ class ReconciliationReportService
     private const REVIEW_THRESHOLD_NGN = 100.0;
 
     /**
+     * Virtual-card ledger types that represent merchant spend (USD).
+     * Prefer settlement/payment/purchase — exclude authorization to avoid double-counting with settlement.
+     *
+     * @var list<string>
+     */
+    private const CARD_SPEND_TYPES = ['payment', 'settlement', 'purchase'];
+
+    /**
      * @return array{from: ?string, to: ?string}
      */
     public function normalizeRange(?string $from, ?string $to): array
@@ -63,7 +71,12 @@ class ReconciliationReportService
                 'deposited' => $buckets['deposited'],
                 'deposited_display' => $this->ngn($buckets['deposited']),
                 'deposited_count' => $buckets['deposited_count'],
-                'helper' => 'Naira users added to their wallets',
+                'card_refunds' => $buckets['card_refunds'],
+                'card_refunds_display' => $this->ngn($buckets['card_refunds']),
+                'card_refunds_count' => $buckets['card_refunds_count'],
+                'total' => $buckets['deposited'] + $buckets['card_refunds'],
+                'total_display' => $this->ngn($buckets['deposited'] + $buckets['card_refunds']),
+                'helper' => 'Naira users added (deposits + card refunds)',
             ],
             'money_out' => [
                 'total' => $moneyOut,
@@ -93,7 +106,7 @@ class ReconciliationReportService
                 'spent_usd' => $cardSpendUsd,
                 'spent_usd_display' => $this->usd($cardSpendUsd),
                 'spent_count' => $this->countCardSpend(null, $range['from'], $range['to']),
-                'helper' => 'Merchant spend on virtual cards (USD)',
+                'helper' => 'Merchant spend on virtual cards (USD): payment, settlement, purchase',
             ],
             'fees_collected' => [
                 'amount' => $buckets['fees'],
@@ -144,6 +157,7 @@ class ReconciliationReportService
             ])
             ->addSelect([
                 DB::raw('COALESCE(tx.deposited, 0) as deposited'),
+                DB::raw('COALESCE(tx.card_refunds, 0) as card_refunds'),
                 DB::raw('COALESCE(tx.withdrawn, 0) as withdrawn'),
                 DB::raw('COALESCE(tx.bill_payments, 0) as bill_payments'),
                 DB::raw('COALESCE(tx.card_creation_fees, 0) as card_creation_fees'),
@@ -177,6 +191,7 @@ class ReconciliationReportService
         $paginator->getCollection()->transform(function ($row) use ($allTime) {
             $buckets = [
                 'deposited' => (float) $row->deposited,
+                'card_refunds' => (float) $row->card_refunds,
                 'withdrawn' => (float) $row->withdrawn,
                 'bill_payments' => (float) $row->bill_payments,
                 'card_creation_fees' => (float) $row->card_creation_fees,
@@ -193,6 +208,8 @@ class ReconciliationReportService
                 'phone_number' => $row->phone_number,
                 'deposited' => $buckets['deposited'],
                 'deposited_display' => $this->ngn($buckets['deposited']),
+                'card_refunds' => $buckets['card_refunds'],
+                'card_refunds_display' => $this->ngn($buckets['card_refunds']),
                 'withdrawn' => $buckets['withdrawn'],
                 'withdrawn_display' => $this->ngn($buckets['withdrawn']),
                 'bill_payments' => $buckets['bill_payments'],
@@ -256,7 +273,12 @@ class ReconciliationReportService
                 'deposited' => $buckets['deposited'],
                 'deposited_display' => $this->ngn($buckets['deposited']),
                 'deposited_count' => $buckets['deposited_count'],
-                'helper' => 'Naira this user added to their wallet',
+                'card_refunds' => $buckets['card_refunds'],
+                'card_refunds_display' => $this->ngn($buckets['card_refunds']),
+                'card_refunds_count' => $buckets['card_refunds_count'],
+                'total' => $buckets['deposited'] + $buckets['card_refunds'],
+                'total_display' => $this->ngn($buckets['deposited'] + $buckets['card_refunds']),
+                'helper' => 'Naira this user added (deposits + card refunds)',
             ],
             'money_out' => [
                 'total' => $moneyOut,
@@ -286,7 +308,7 @@ class ReconciliationReportService
                 'spent_usd' => $cardSpendUsd,
                 'spent_usd_display' => $this->usd($cardSpendUsd),
                 'spent_count' => $this->countCardSpend((int) $user->id, $range['from'], $range['to']),
-                'helper' => 'Merchant spend on their virtual cards (USD)',
+                'helper' => 'Merchant spend on their virtual cards (USD): payment, settlement, purchase',
             ],
             'fees_collected' => [
                 'amount' => $buckets['fees'],
@@ -320,6 +342,8 @@ class ReconciliationReportService
         $row = (clone $q)->selectRaw("
             COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) as deposited,
             COALESCE(SUM(CASE WHEN type = 'deposit' THEN 1 ELSE 0 END), 0) as deposited_count,
+            COALESCE(SUM(CASE WHEN type = 'card_refund' THEN amount ELSE 0 END), 0) as card_refunds,
+            COALESCE(SUM(CASE WHEN type = 'card_refund' THEN 1 ELSE 0 END), 0) as card_refunds_count,
             COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN total_amount ELSE 0 END), 0) as withdrawn,
             COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN 1 ELSE 0 END), 0) as withdrawn_count,
             COALESCE(SUM(CASE WHEN type = 'bill_payment' THEN total_amount ELSE 0 END), 0) as bill_payments,
@@ -334,6 +358,8 @@ class ReconciliationReportService
         return [
             'deposited' => (float) ($row->deposited ?? 0),
             'deposited_count' => (int) ($row->deposited_count ?? 0),
+            'card_refunds' => (float) ($row->card_refunds ?? 0),
+            'card_refunds_count' => (int) ($row->card_refunds_count ?? 0),
             'withdrawn' => (float) ($row->withdrawn ?? 0),
             'withdrawn_count' => (int) ($row->withdrawn_count ?? 0),
             'bill_payments' => (float) ($row->bill_payments ?? 0),
@@ -351,6 +377,7 @@ class ReconciliationReportService
         return Transaction::query()
             ->selectRaw('user_id')
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) as deposited")
+            ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_refund' THEN amount ELSE 0 END), 0) as card_refunds")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN total_amount ELSE 0 END), 0) as withdrawn")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'bill_payment' THEN total_amount ELSE 0 END), 0) as bill_payments")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_creation' THEN total_amount ELSE 0 END), 0) as card_creation_fees")
@@ -368,7 +395,7 @@ class ReconciliationReportService
         return VirtualCardTransaction::query()
             ->selectRaw('user_id, COALESCE(SUM(amount), 0) as card_spent_usd')
             ->where('status', 'completed')
-            ->where('type', 'payment')
+            ->whereIn('type', self::CARD_SPEND_TYPES)
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
             ->groupBy('user_id');
@@ -378,7 +405,7 @@ class ReconciliationReportService
     {
         return (float) VirtualCardTransaction::query()
             ->where('status', 'completed')
-            ->where('type', 'payment')
+            ->whereIn('type', self::CARD_SPEND_TYPES)
             ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
@@ -389,7 +416,7 @@ class ReconciliationReportService
     {
         return (int) VirtualCardTransaction::query()
             ->where('status', 'completed')
-            ->where('type', 'payment')
+            ->whereIn('type', self::CARD_SPEND_TYPES)
             ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
@@ -471,14 +498,14 @@ class ReconciliationReportService
             + (float) $buckets['bill_payments']
             + (float) $buckets['card_creation_fees']
             + (float) $buckets['card_funding'];
-        $deposited = (float) $buckets['deposited'];
+        $moneyIn = (float) $buckets['deposited'] + (float) ($buckets['card_refunds'] ?? 0);
 
         if ($allTime) {
-            $residual = $deposited - $outflows - $nairaBalance;
-            $explanation = 'Deposited should roughly equal withdrawals + bills + card fees + card loads + current Naira balance.';
+            $residual = $moneyIn - $outflows - $nairaBalance;
+            $explanation = 'Deposits + card refunds should roughly equal withdrawals + bills + card fees + card loads + current Naira balance.';
         } else {
-            $residual = $deposited - $outflows;
-            $explanation = 'For this date range: deposited minus money out (net flow into wallets). Current balances are shown separately.';
+            $residual = $moneyIn - $outflows;
+            $explanation = 'For this date range: money in (deposits + card refunds) minus money out. Current balances are shown separately.';
         }
 
         $needsReview = abs($residual) > self::REVIEW_THRESHOLD_NGN;
