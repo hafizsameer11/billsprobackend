@@ -65,4 +65,20 @@ class AdminReconciliationController extends Controller
 
         return ResponseHelper::success($data, 'User money story retrieved.');
     }
+
+    /**
+     * Complete chronological ledger for one user (Naira running balance + card USD moves).
+     */
+    public function userLedger(Request $request, User $user): JsonResponse
+    {
+        $from = $request->query('from');
+        $to = $request->query('to');
+        $data = $this->reconciliation->userLedger(
+            $user,
+            is_string($from) ? $from : null,
+            is_string($to) ? $to : null,
+        );
+
+        return ResponseHelper::success($data, 'User ledger retrieved.');
+    }
 }

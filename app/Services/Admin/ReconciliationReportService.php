@@ -27,6 +27,20 @@ class ReconciliationReportService
      */
     private const CARD_SPEND_TYPES = ['payment', 'settlement', 'purchase'];
 
+    /** Naira transaction types that add money to the wallet. */
+    private const LEDGER_CREDIT_TYPES = ['deposit', 'card_refund', 'refund', 'reversal', 'bonus', 'cashback'];
+
+    /** Naira transaction types that take money out of the wallet. */
+    private const LEDGER_DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding'];
+
+    /**
+     * Book-keeping rows that explain a wallet correction rather than a new money movement.
+     * They are shown in the ledger but must not shift the running balance.
+     *
+     * @var list<string>
+     */
+    private const LEDGER_NOTE_TYPES = ['adjustment'];
+
     /**
      * @return array{from: ?string, to: ?string}
      */
@@ -328,6 +342,181 @@ class ReconciliationReportService
     }
 
     /**
+     * Full chronological ledger for one user: every Naira movement with a running balance,
+     * plus every virtual-card (USD) movement, so admins can trace each fee and spend.
+     *
+     * @return array<string, mixed>
+     */
+    public function userLedger(User $user, ?string $from, ?string $to): array
+    {
+        $range = $this->normalizeRange($from, $to);
+
+        $nairaTx = Transaction::query()
+            ->where('user_id', $user->id)
+            ->where('currency', 'NGN')
+            ->when($range['from'] !== null, fn ($q) => $q->whereDate('created_at', '>=', $range['from']))
+            ->when($range['to'] !== null, fn ($q) => $q->whereDate('created_at', '<=', $range['to']))
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get([
+                'id', 'transaction_id', 'type', 'category', 'status', 'amount', 'fee',
+                'total_amount', 'description', 'reference', 'created_at',
+            ]);
+
+        $rows = [];
+        $running = 0.0;
+        $unmapped = [];
+
+        foreach ($nairaTx as $tx) {
+            $type = (string) $tx->type;
+            $isNote = in_array($type, self::LEDGER_NOTE_TYPES, true);
+            $isCredit = ! $isNote && in_array($type, self::LEDGER_CREDIT_TYPES, true);
+            $isDebit = ! $isNote && in_array($type, self::LEDGER_DEBIT_TYPES, true);
+            $counts = $tx->status === 'completed' && ($isCredit || $isDebit);
+
+            // Credits move `amount`; debits move `total_amount` (principal + fee).
+            $movement = $isCredit ? (float) $tx->amount : (float) $tx->total_amount;
+
+            if ($counts) {
+                $running += $isCredit ? $movement : -$movement;
+            }
+            if (! $isCredit && ! $isDebit && ! $isNote) {
+                $unmapped[$type] = ($unmapped[$type] ?? 0) + 1;
+            }
+
+            $rows[] = [
+                'id' => 'ngn-'.$tx->id,
+                'wallet' => 'naira',
+                'wallet_label' => 'Naira wallet',
+                'at' => optional($tx->created_at)->toIso8601String(),
+                'type' => $type,
+                'label' => $this->humanizeType($type),
+                'category' => $tx->category,
+                'status' => (string) $tx->status,
+                'direction' => $isCredit ? 'in' : ($isDebit ? 'out' : ($isNote ? 'note' : 'unknown')),
+                'amount' => (float) $tx->amount,
+                'amount_display' => $this->ngn((float) $tx->amount),
+                'fee' => (float) $tx->fee,
+                'fee_display' => $this->ngn((float) $tx->fee),
+                'total' => (float) $tx->total_amount,
+                'total_display' => $this->ngn((float) $tx->total_amount),
+                'signed_display' => $isNote
+                    ? 'note '.$this->ngn((float) $tx->amount)
+                    : ($isCredit ? '+' : ($isDebit ? '-' : '')).$this->ngn($movement),
+                'counts_towards_balance' => $counts,
+                'balance_after' => $counts ? $running : null,
+                'balance_after_display' => $counts ? $this->ngn($running) : null,
+                'description' => (string) ($tx->description ?? ''),
+                'reference' => $tx->reference ?? $tx->transaction_id,
+            ];
+        }
+
+        $cardTx = VirtualCardTransaction::query()
+            ->where('user_id', $user->id)
+            ->when($range['from'] !== null, fn ($q) => $q->whereDate('created_at', '>=', $range['from']))
+            ->when($range['to'] !== null, fn ($q) => $q->whereDate('created_at', '<=', $range['to']))
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get([
+                'id', 'virtual_card_id', 'type', 'status', 'currency', 'amount', 'fee',
+                'total_amount', 'description', 'reference', 'created_at',
+            ]);
+
+        $cardRows = [];
+        foreach ($cardTx as $tx) {
+            $type = (string) $tx->type;
+            $isSpend = in_array($type, self::CARD_SPEND_TYPES, true);
+            $isFee = $type === 'fee';
+            $isLoad = in_array($type, ['fund', 'funding', 'topup'], true);
+
+            $cardRows[] = [
+                'id' => 'card-'.$tx->id,
+                'wallet' => 'card',
+                'wallet_label' => 'Card #'.$tx->virtual_card_id.' (USD)',
+                'virtual_card_id' => (int) $tx->virtual_card_id,
+                'at' => optional($tx->created_at)->toIso8601String(),
+                'type' => $type,
+                'label' => $this->humanizeType($type),
+                'status' => (string) $tx->status,
+                'direction' => $isLoad ? 'in' : (($isSpend || $isFee) ? 'out' : 'info'),
+                'amount' => (float) $tx->amount,
+                'amount_display' => $this->usd((float) $tx->amount),
+                'fee' => (float) $tx->fee,
+                'fee_display' => $this->usd((float) $tx->fee),
+                'total' => (float) $tx->total_amount,
+                'total_display' => $this->usd((float) $tx->total_amount),
+                'description' => (string) ($tx->description ?? ''),
+                'reference' => $tx->reference,
+                'is_decline_fee' => $isFee && stripos((string) $tx->description, 'declin') !== false,
+            ];
+        }
+
+        $actualBalance = (float) FiatWallet::query()
+            ->where('user_id', $user->id)
+            ->where('currency', 'NGN')
+            ->sum('balance');
+        $allTime = $range['from'] === null && $range['to'] === null;
+        $drift = $allTime ? $running - $actualBalance : 0.0;
+
+        return [
+            'user' => [
+                'user_id' => (int) $user->id,
+                'display_name' => $this->displayName($user),
+                'email' => $user->email,
+            ],
+            'period' => [
+                'from' => $range['from'],
+                'to' => $range['to'],
+                'label' => $this->periodLabel($range['from'], $range['to']),
+            ],
+            'naira_rows' => $rows,
+            'card_rows' => $cardRows,
+            'totals' => [
+                'naira_rows_count' => count($rows),
+                'card_rows_count' => count($cardRows),
+                'ledger_balance' => $running,
+                'ledger_balance_display' => $this->ngn($running),
+                'wallet_balance' => $actualBalance,
+                'wallet_balance_display' => $this->ngn($actualBalance),
+                'drift' => $drift,
+                'drift_display' => $this->ngn($drift),
+                'drift_note' => $allTime
+                    ? 'Ledger balance should match the wallet balance when every movement is recorded.'
+                    : 'Drift is only meaningful over all time.',
+                'unmapped_types' => $unmapped,
+            ],
+        ];
+    }
+
+    private function humanizeType(string $type): string
+    {
+        $map = [
+            'deposit' => 'Deposit',
+            'withdrawal' => 'Withdrawal',
+            'bill_payment' => 'Bill payment',
+            'card_creation' => 'Card creation fee',
+            'card_funding' => 'Card load',
+            'card_refund' => 'Card refund',
+            'adjustment' => 'Manual adjustment',
+            'payment' => 'Card payment',
+            'settlement' => 'Card settlement',
+            'purchase' => 'Card purchase',
+            'authorization' => 'Card authorization',
+            'authorization_declined' => 'Declined authorization',
+            'fee' => 'Card fee',
+            'fund' => 'Card top-up',
+            'funding' => 'Card top-up',
+            'verification' => 'Card verification',
+            'reversal' => 'Reversal',
+            'reversal_settled' => 'Reversal settled',
+            'cross_border_settled' => 'Cross-border fee',
+            'cross_border_pending' => 'Cross-border (pending)',
+        ];
+
+        return $map[$type] ?? ucwords(str_replace('_', ' ', $type));
+    }
+
+    /**
      * @return array<string, float|int>
      */
     private function aggregateNairaBuckets(?int $userId, ?string $from, ?string $to): array
@@ -514,7 +703,7 @@ class ReconciliationReportService
             'residual' => $residual,
             'residual_display' => $this->ngn($residual),
             'status' => $needsReview ? 'needs_review' : 'ok',
-            'status_label' => $needsReview ? 'Needs review' : 'OK',
+            'status_label' => $needsReview ? 'Gap '.$this->ngn($residual) : 'Balanced',
             'threshold_ngn' => self::REVIEW_THRESHOLD_NGN,
             'explanation' => $explanation,
             'all_time' => $allTime,

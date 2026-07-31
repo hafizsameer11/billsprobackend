@@ -259,6 +259,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/reconciliation/overview', [AdminReconciliationController::class, 'overview']);
         Route::get('/reconciliation/users', [AdminReconciliationController::class, 'users']);
         Route::get('/reconciliation/users/{user}', [AdminReconciliationController::class, 'userShow']);
+        Route::get('/reconciliation/users/{user}/ledger', [AdminReconciliationController::class, 'userLedger']);
 
         Route::get('/commission/tiers', [AdminCommissionController::class, 'tiers']);
         Route::put('/commission/tiers/{tierKey}', [AdminCommissionController::class, 'updateTier']);
