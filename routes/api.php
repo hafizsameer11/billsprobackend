@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\AdminPlatformRateController;
 use App\Http\Controllers\Api\AdminServiceMaintenanceController;
 use App\Http\Controllers\Api\AdminCommissionController;
 use App\Http\Controllers\Api\AdminProfitController;
+use App\Http\Controllers\Api\AdminDaybookController;
 use App\Http\Controllers\Api\AdminReconciliationController;
 use App\Http\Controllers\Api\AdminStatsController;
 use App\Http\Controllers\Api\AdminSupportTicketController;
@@ -260,6 +261,9 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/reconciliation/users', [AdminReconciliationController::class, 'users']);
         Route::get('/reconciliation/users/{user}', [AdminReconciliationController::class, 'userShow']);
         Route::get('/reconciliation/users/{user}/ledger', [AdminReconciliationController::class, 'userLedger']);
+
+        Route::get('/daybook', [AdminDaybookController::class, 'day']);
+        Route::get('/daybook/transactions', [AdminDaybookController::class, 'transactions']);
 
         Route::get('/commission/tiers', [AdminCommissionController::class, 'tiers']);
         Route::put('/commission/tiers/{tierKey}', [AdminCommissionController::class, 'updateTier']);
