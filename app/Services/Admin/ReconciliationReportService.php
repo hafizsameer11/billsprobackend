@@ -131,13 +131,11 @@ class ReconciliationReportService
         $crypto = $this->aggregateCryptoStrip(null, $range['from'], $range['to']);
         $billBreakdown = $this->billCategoryBreakdown(null, $range['from'], $range['to']);
 
-        $check = $this->buildCheck(
-            $buckets,
-            $nairaBalance,
-            $range['from'] === null && $range['to'] === null
-        );
+        $isRange = $range['from'] !== null || $range['to'] !== null;
+        $allTimeBuckets = $isRange ? $this->aggregateNairaBuckets(null, null, null) : $buckets;
+        $check = $this->buildCheck($allTimeBuckets, $nairaBalance, $buckets, $isRange);
 
-        $moneyOut = $buckets['withdrawn'] + $buckets['bill_payments'] + $buckets['card_creation_fees'] + $buckets['card_funding'];
+        $moneyOut = $this->sumMoneyOut($buckets);
 
         return [
             'period' => [
@@ -210,6 +208,9 @@ class ReconciliationReportService
 
         $txAgg = $this->nairaBucketsSubquery($range['from'], $range['to']);
         $cardSpendAgg = $this->cardSpendSubquery($range['from'], $range['to']);
+        // The balance check is always all-time, so a date filter cannot invent a gap.
+        $isRange = $range['from'] !== null || $range['to'] !== null;
+        $txAggAll = $isRange ? $this->nairaBucketsSubquery(null, null) : null;
 
         $nairaBalSub = FiatWallet::query()
             ->selectRaw('user_id, COALESCE(SUM(balance), 0) as naira_balance')
@@ -225,6 +226,7 @@ class ReconciliationReportService
             ->leftJoinSub($cardSpendAgg, 'vcs', 'users.id', '=', 'vcs.user_id')
             ->leftJoinSub($nairaBalSub, 'nb', 'users.id', '=', 'nb.user_id')
             ->leftJoinSub($cardBalSub, 'cb', 'users.id', '=', 'cb.user_id')
+            ->when($txAggAll !== null, fn ($q) => $q->leftJoinSub($txAggAll, 'txall', 'users.id', '=', 'txall.user_id'))
             ->select([
                 'users.id',
                 'users.name',
@@ -244,7 +246,15 @@ class ReconciliationReportService
                 DB::raw('COALESCE(vcs.card_spent_usd, 0) as card_spent_usd'),
                 DB::raw('COALESCE(nb.naira_balance, 0) as naira_balance'),
                 DB::raw('COALESCE(cb.card_balance_usd, 0) as card_balance_usd'),
-            ]);
+            ])
+            ->when($txAggAll !== null, fn ($q) => $q->addSelect([
+                DB::raw('COALESCE(txall.deposited, 0) as all_deposited'),
+                DB::raw('COALESCE(txall.card_refunds, 0) as all_card_refunds'),
+                DB::raw('COALESCE(txall.withdrawn, 0) as all_withdrawn'),
+                DB::raw('COALESCE(txall.bill_payments, 0) as all_bill_payments'),
+                DB::raw('COALESCE(txall.card_creation_fees, 0) as all_card_creation_fees'),
+                DB::raw('COALESCE(txall.card_funding, 0) as all_card_funding'),
+            ]));
         $this->excludeTestAndStaffUsers($query);
         $query
             ->where(function ($q) {
@@ -265,10 +275,8 @@ class ReconciliationReportService
             })
             ->orderByDesc(DB::raw('COALESCE(tx.deposited, 0)'));
 
-        $allTime = $range['from'] === null && $range['to'] === null;
-
         $paginator = $query->paginate($perPage);
-        $paginator->getCollection()->transform(function ($row) use ($allTime) {
+        $paginator->getCollection()->transform(function ($row) use ($isRange) {
             $buckets = [
                 'deposited' => (float) $row->deposited,
                 'card_refunds' => (float) $row->card_refunds,
@@ -279,7 +287,15 @@ class ReconciliationReportService
                 'fees' => (float) $row->fees,
             ];
             $nairaBalance = (float) $row->naira_balance;
-            $check = $this->buildCheck($buckets, $nairaBalance, $allTime);
+            $allTimeBuckets = $isRange ? [
+                'deposited' => (float) $row->all_deposited,
+                'card_refunds' => (float) $row->all_card_refunds,
+                'withdrawn' => (float) $row->all_withdrawn,
+                'bill_payments' => (float) $row->all_bill_payments,
+                'card_creation_fees' => (float) $row->all_card_creation_fees,
+                'card_funding' => (float) $row->all_card_funding,
+            ] : $buckets;
+            $check = $this->buildCheck($allTimeBuckets, $nairaBalance, $buckets, $isRange);
 
             return [
                 'user_id' => (int) $row->id,
@@ -333,9 +349,10 @@ class ReconciliationReportService
             ->sum('balance');
         $crypto = $this->aggregateCryptoStrip((int) $user->id, $range['from'], $range['to']);
         $billBreakdown = $this->billCategoryBreakdown((int) $user->id, $range['from'], $range['to']);
-        $allTime = $range['from'] === null && $range['to'] === null;
-        $check = $this->buildCheck($buckets, $nairaBalance, $allTime);
-        $moneyOut = $buckets['withdrawn'] + $buckets['bill_payments'] + $buckets['card_creation_fees'] + $buckets['card_funding'];
+        $isRange = $range['from'] !== null || $range['to'] !== null;
+        $allTimeBuckets = $isRange ? $this->aggregateNairaBuckets((int) $user->id, null, null) : $buckets;
+        $check = $this->buildCheck($allTimeBuckets, $nairaBalance, $buckets, $isRange);
+        $moneyOut = $this->sumMoneyOut($buckets);
 
         return [
             'user' => [
@@ -765,24 +782,36 @@ class ReconciliationReportService
 
     /**
      * @param  array<string, float|int>  $buckets
-     * @return array<string, mixed>
      */
-    private function buildCheck(array $buckets, float $nairaBalance, bool $allTime): array
+    private function sumMoneyIn(array $buckets): float
     {
-        $outflows = (float) $buckets['withdrawn']
+        return (float) $buckets['deposited'] + (float) ($buckets['card_refunds'] ?? 0);
+    }
+
+    /**
+     * @param  array<string, float|int>  $buckets
+     */
+    private function sumMoneyOut(array $buckets): float
+    {
+        return (float) $buckets['withdrawn']
             + (float) $buckets['bill_payments']
             + (float) $buckets['card_creation_fees']
             + (float) $buckets['card_funding'];
-        $moneyIn = (float) $buckets['deposited'] + (float) ($buckets['card_refunds'] ?? 0);
+    }
 
-        if ($allTime) {
-            $residual = $moneyIn - $outflows - $nairaBalance;
-            $explanation = 'Deposits + card refunds should roughly equal withdrawals + bills + card fees + card loads + current Naira balance.';
-        } else {
-            $residual = $moneyIn - $outflows;
-            $explanation = 'For this date range: money in (deposits + card refunds) minus money out. Current balances are shown separately.';
-        }
-
+    /**
+     * Does the money add up? This always compares the *whole* history against the current
+     * Naira balance — a date filter narrows the displayed figures but must never create a
+     * fake gap, because money deposited inside the window is still sitting in the wallet.
+     *
+     * @param  array<string, float|int>  $allTimeBuckets  every completed Naira movement, ignoring the filter
+     * @param  array<string, float|int>  $rangeBuckets  movements inside the selected period
+     * @return array<string, mixed>
+     */
+    private function buildCheck(array $allTimeBuckets, float $nairaBalance, array $rangeBuckets, bool $isRange): array
+    {
+        $residual = $this->sumMoneyIn($allTimeBuckets) - $this->sumMoneyOut($allTimeBuckets) - $nairaBalance;
+        $netFlow = $this->sumMoneyIn($rangeBuckets) - $this->sumMoneyOut($rangeBuckets);
         $needsReview = abs($residual) > self::REVIEW_THRESHOLD_NGN;
 
         return [
@@ -791,8 +820,13 @@ class ReconciliationReportService
             'status' => $needsReview ? 'needs_review' : 'ok',
             'status_label' => $needsReview ? 'Gap '.$this->ngn($residual) : 'Balanced',
             'threshold_ngn' => self::REVIEW_THRESHOLD_NGN,
-            'explanation' => $explanation,
-            'all_time' => $allTime,
+            'explanation' => 'All-time check: every deposit and card refund, minus withdrawals, bills, card creation fees and card loads, should equal the current Naira balance.',
+            'all_time' => true,
+            'net_flow' => $netFlow,
+            'net_flow_display' => $this->ngn($netFlow),
+            'net_flow_label' => $isRange
+                ? 'Net into the Naira wallet in this period'
+                : 'Net into the Naira wallet (all time)',
         ];
     }
 
