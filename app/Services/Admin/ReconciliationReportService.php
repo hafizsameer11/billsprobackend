@@ -53,6 +53,64 @@ class ReconciliationReportService
     }
 
     /**
+     * Staff / sandbox / internal accounts that must not appear in reconciliation.
+     * Keep Peter and other real early users — only exclude admin + known test inboxes.
+     *
+     * @return list<string>
+     */
+    private function excludedEmailPatterns(): array
+    {
+        return [
+            '%hmstech%',
+            '%@test.com',
+            'test@%',
+            'testing%',
+            'admin@%',
+            'annaleona90@gmail.com',
+        ];
+    }
+
+    /**
+     * Query of real customer user IDs (excludes admins + test/staff emails).
+     */
+    private function realUserIdsQuery()
+    {
+        return User::query()
+            ->select('id')
+            ->where(function ($q) {
+                $q->where('is_admin', false)->orWhereNull('is_admin');
+            })
+            ->where(function ($q) {
+                $q->whereNull('email')
+                    ->orWhere(function ($q2) {
+                        foreach ($this->excludedEmailPatterns() as $pattern) {
+                            $q2->where('email', 'not like', $pattern);
+                        }
+                    });
+            });
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Builder<\App\Models\User>|\Illuminate\Database\Query\Builder  $query
+     * @return \Illuminate\Database\Eloquent\Builder<\App\Models\User>|\Illuminate\Database\Query\Builder
+     */
+    private function excludeTestAndStaffUsers($query)
+    {
+        return $query
+            ->where(function ($q) {
+                $q->where('users.is_admin', false)->orWhereNull('users.is_admin');
+            })
+            ->where(function ($q) {
+                $q->whereNull('users.email')
+                    ->orWhere(function ($q2) {
+                        foreach ($this->excludedEmailPatterns() as $pattern) {
+                            $q2->where('users.email', 'not like', $pattern);
+                        }
+                    });
+            });
+    }
+
+    /**
      * Platform-wide overview for a date range (empty = all time).
      *
      * @return array<string, mixed>
@@ -62,8 +120,14 @@ class ReconciliationReportService
         $range = $this->normalizeRange($from, $to);
         $buckets = $this->aggregateNairaBuckets(null, $range['from'], $range['to']);
         $cardSpendUsd = $this->sumCardSpendUsd(null, $range['from'], $range['to']);
-        $nairaBalance = (float) FiatWallet::query()->where('currency', 'NGN')->sum('balance');
-        $cardBalanceUsd = (float) VirtualCard::query()->sum('balance');
+        $realIds = $this->realUserIdsQuery();
+        $nairaBalance = (float) FiatWallet::query()
+            ->where('currency', 'NGN')
+            ->whereIn('user_id', $realIds)
+            ->sum('balance');
+        $cardBalanceUsd = (float) VirtualCard::query()
+            ->whereIn('user_id', $realIds)
+            ->sum('balance');
         $crypto = $this->aggregateCryptoStrip(null, $range['from'], $range['to']);
         $billBreakdown = $this->billCategoryBreakdown(null, $range['from'], $range['to']);
 
@@ -180,7 +244,9 @@ class ReconciliationReportService
                 DB::raw('COALESCE(vcs.card_spent_usd, 0) as card_spent_usd'),
                 DB::raw('COALESCE(nb.naira_balance, 0) as naira_balance'),
                 DB::raw('COALESCE(cb.card_balance_usd, 0) as card_balance_usd'),
-            ])
+            ]);
+        $this->excludeTestAndStaffUsers($query);
+        $query
             ->where(function ($q) {
                 $q->whereNotNull('tx.user_id')
                     ->orWhereNotNull('vcs.user_id')
@@ -519,13 +585,28 @@ class ReconciliationReportService
     /**
      * @return array<string, float|int>
      */
+    /**
+     * Scope a query to one user, or to all real (non-test/staff) users when $userId is null.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder<\Illuminate\Database\Eloquent\Model>|\Illuminate\Database\Query\Builder  $query
+     * @return \Illuminate\Database\Eloquent\Builder<\Illuminate\Database\Eloquent\Model>|\Illuminate\Database\Query\Builder
+     */
+    private function scopeToUserOrRealUsers($query, ?int $userId)
+    {
+        if ($userId !== null) {
+            return $query->where('user_id', $userId);
+        }
+
+        return $query->whereIn('user_id', $this->realUserIdsQuery());
+    }
+
     private function aggregateNairaBuckets(?int $userId, ?string $from, ?string $to): array
     {
         $q = Transaction::query()
             ->where('status', 'completed')
-            ->where('currency', 'NGN')
-            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
-            ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
+            ->where('currency', 'NGN');
+        $this->scopeToUserOrRealUsers($q, $userId);
+        $q->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to));
 
         $row = (clone $q)->selectRaw("
@@ -592,10 +673,12 @@ class ReconciliationReportService
 
     private function sumCardSpendUsd(?int $userId, ?string $from, ?string $to): float
     {
-        return (float) VirtualCardTransaction::query()
+        $q = VirtualCardTransaction::query()
             ->where('status', 'completed')
-            ->whereIn('type', self::CARD_SPEND_TYPES)
-            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
+            ->whereIn('type', self::CARD_SPEND_TYPES);
+        $this->scopeToUserOrRealUsers($q, $userId);
+
+        return (float) $q
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
             ->sum('amount');
@@ -603,10 +686,12 @@ class ReconciliationReportService
 
     private function countCardSpend(?int $userId, ?string $from, ?string $to): int
     {
-        return (int) VirtualCardTransaction::query()
+        $q = VirtualCardTransaction::query()
             ->where('status', 'completed')
-            ->whereIn('type', self::CARD_SPEND_TYPES)
-            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
+            ->whereIn('type', self::CARD_SPEND_TYPES);
+        $this->scopeToUserOrRealUsers($q, $userId);
+
+        return (int) $q
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
             ->count();
@@ -617,14 +702,15 @@ class ReconciliationReportService
      */
     private function billCategoryBreakdown(?int $userId, ?string $from, ?string $to): array
     {
-        $rows = Transaction::query()
+        $q = Transaction::query()
             ->selectRaw("COALESCE(NULLIF(category, ''), 'other') as category")
             ->selectRaw('COALESCE(SUM(total_amount), 0) as amount')
             ->selectRaw('COUNT(*) as cnt')
             ->where('status', 'completed')
             ->where('currency', 'NGN')
-            ->where('type', 'bill_payment')
-            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
+            ->where('type', 'bill_payment');
+        $this->scopeToUserOrRealUsers($q, $userId);
+        $rows = $q
             ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to))
             ->groupBy('category')
@@ -652,9 +738,9 @@ class ReconciliationReportService
     {
         $q = Transaction::query()
             ->where('status', 'completed')
-            ->whereIn('type', ['crypto_deposit', 'crypto_withdrawal', 'crypto_buy', 'crypto_sell', 'external_send'])
-            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
-            ->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
+            ->whereIn('type', ['crypto_deposit', 'crypto_withdrawal', 'crypto_buy', 'crypto_sell', 'external_send']);
+        $this->scopeToUserOrRealUsers($q, $userId);
+        $q->when($from !== null, fn ($q) => $q->whereDate('created_at', '>=', $from))
             ->when($to !== null, fn ($q) => $q->whereDate('created_at', '<=', $to));
 
         $row = (clone $q)->selectRaw("
