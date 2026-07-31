@@ -383,6 +383,7 @@ class DaybookReportService
 
     /**
      * Completed / pending / failed split — pending and failed money is what operators chase.
+     * Money in and money out stay separate, because a single combined total says nothing useful.
      *
      * @return list<array<string, mixed>>
      */
@@ -396,23 +397,37 @@ class DaybookReportService
         }
 
         $rows = $query
-            ->selectRaw('status, COUNT(*) as cnt, COALESCE(SUM(total_amount), 0) as amount')
+            ->selectRaw('status, COUNT(*) as cnt')
+            ->selectRaw('COALESCE(SUM(CASE WHEN type IN (\''.implode("','", self::CREDIT_TYPES).'\') THEN amount ELSE 0 END), 0) as in_amount')
+            ->selectRaw('COALESCE(SUM(CASE WHEN type IN (\''.implode("','", self::DEBIT_TYPES).'\') THEN total_amount ELSE 0 END), 0) as out_amount')
             ->groupBy('status')
             ->get()
             ->keyBy('status');
 
+        // Always show the statuses an operator looks for, even at zero, so "nothing pending"
+        // reads as a deliberate all-clear rather than a card that failed to load.
         $order = ['completed', 'pending', 'processing', 'failed', 'cancelled'];
         $out = [];
         foreach ($order as $status) {
             $row = $rows->get($status);
-            if ($row === null) {
+            $rows->forget($status);
+            if ($row === null && ! in_array($status, ['completed', 'pending', 'failed'], true)) {
                 continue;
             }
-            $rows->forget($status);
-            $out[] = $this->statusLine($status, (int) $row->cnt, (float) $row->amount);
+            $out[] = $this->statusLine(
+                $status,
+                (int) ($row->cnt ?? 0),
+                (float) ($row->in_amount ?? 0),
+                (float) ($row->out_amount ?? 0),
+            );
         }
         foreach ($rows as $status => $row) {
-            $out[] = $this->statusLine((string) $status, (int) $row->cnt, (float) $row->amount);
+            $out[] = $this->statusLine(
+                (string) $status,
+                (int) $row->cnt,
+                (float) $row->in_amount,
+                (float) $row->out_amount,
+            );
         }
 
         return $out;
@@ -421,14 +436,16 @@ class DaybookReportService
     /**
      * @return array<string, mixed>
      */
-    private function statusLine(string $status, int $count, float $amount): array
+    private function statusLine(string $status, int $count, float $in, float $out): array
     {
         return [
             'status' => $status,
             'label' => ucfirst(str_replace('_', ' ', $status)),
             'count' => $count,
-            'amount' => $amount,
-            'amount_display' => $this->ngn($amount),
+            'in_amount' => $in,
+            'in_display' => $this->ngn($in),
+            'out_amount' => $out,
+            'out_display' => $this->ngn($out),
         ];
     }
 
