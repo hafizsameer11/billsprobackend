@@ -65,6 +65,16 @@ return [
             'fee_usd' => 1,
             'provider_cost_usd' => 0.75,
         ],
+        'terminate' => [
+            'label' => 'Mastercard Card Termination Refund',
+            'fee_usd' => 1,
+            'exchange_rate_ngn_per_usd' => 1420,
+        ],
+        'visa_terminate' => [
+            'label' => 'Visa Card Termination Refund',
+            'fee_usd' => 1,
+            'exchange_rate_ngn_per_usd' => 1420,
+        ],
     ],
 
     'crypto' => [
@@ -114,6 +124,8 @@ return [
         ['group' => 'Virtual cards', 'slug' => 'virtual_card|fund|||'],
         ['group' => 'Virtual cards', 'slug' => 'virtual_card|visa_decline_fee|||'],
         ['group' => 'Virtual cards', 'slug' => 'virtual_card|decline_fee|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|visa_terminate|||'],
+        ['group' => 'Virtual cards', 'slug' => 'virtual_card|terminate|||'],
         ['group' => 'Crypto', 'type' => 'crypto_buy_sell'],
         ['group' => 'Crypto', 'slug' => 'crypto|deposit|||'],
         ['group' => 'Bill payments', 'type' => 'commission_airtime'],

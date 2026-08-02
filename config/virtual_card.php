@@ -50,6 +50,13 @@ return [
     'fund_load_percent' => (float) env('VIRTUAL_CARD_FUND_LOAD_PERCENT', 1.0),
 
     /*
+    | Card termination: $1 fee deducted from card balance; remainder refunded to Naira wallet
+    | at the admin sell rate (`virtual_card` / `terminate` or `visa_terminate` platform rate).
+    */
+    'terminate_fee_usd' => (float) env('VIRTUAL_CARD_TERMINATE_FEE_USD', 1.0),
+    'terminate_sell_rate_ngn_per_usd' => (float) env('VIRTUAL_CARD_TERMINATE_SELL_RATE_NGN', 1420.0),
+
+    /*
     | Merchant-paid decline fee recovery (Pagocards visa wallet subsidizes user card).
     */
     'decline_fee_recovery_enabled' => filter_var(env('VIRTUAL_CARD_DECLINE_FEE_RECOVERY_ENABLED', true), FILTER_VALIDATE_BOOLEAN),

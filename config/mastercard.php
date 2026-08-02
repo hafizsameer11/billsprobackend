@@ -57,5 +57,6 @@ return [
         'visa_fund' => env('MASTERCARD_API_VISA_FUND_PATH') ?: '/visacard/fundcard',
         'visa_block' => env('MASTERCARD_API_VISA_BLOCK_PATH') ?: '/visacard/blockcard',
         'visa_unblock' => env('MASTERCARD_API_VISA_UNBLOCK_PATH') ?: '/visacard/unblockcard',
+        'visa_terminate' => env('MASTERCARD_API_VISA_TERMINATE_PATH') ?: '/terminate',
     ],
 ];

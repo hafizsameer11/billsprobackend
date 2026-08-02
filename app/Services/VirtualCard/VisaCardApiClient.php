@@ -79,6 +79,14 @@ class VisaCardApiClient
     /**
      * @throws MastercardApiException
      */
+    public function terminateCard(array $payload): array
+    {
+        return $this->request('visa_terminate', $payload);
+    }
+
+    /**
+     * @throws MastercardApiException
+     */
     protected function request(string $endpointKey, array $payload): array
     {
         $path = (string) config("mastercard.endpoints.{$endpointKey}");

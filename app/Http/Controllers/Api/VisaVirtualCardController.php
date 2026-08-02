@@ -218,6 +218,73 @@ class VisaVirtualCardController extends Controller
         return $this->freezeResponse($request, $id, true);
     }
 
+    #[OA\Get(path: '/api/virtual-cards/visa-card/{id}/terminate-estimate', summary: 'Estimate Visa card termination refund', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
+    public function terminateEstimate(Request $request, int $id): JsonResponse
+    {
+        try {
+            if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
+                return ResponseHelper::notFound('Visa virtual card not found.');
+            }
+
+            $result = $this->virtualCardService->estimateCardTermination($request->user()->id, $id);
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to estimate termination', $result['status'] ?? 400);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Termination estimate retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
+        } catch (\Exception $e) {
+            Log::error('Visa terminate estimate error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while estimating card termination.');
+        }
+    }
+
+    #[OA\Post(path: '/api/virtual-cards/visa-card/{id}/terminate', summary: 'Terminate Visa card', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
+    public function terminate(Request $request, int $id): JsonResponse
+    {
+        try {
+            if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
+                return ResponseHelper::notFound('Visa virtual card not found.');
+            }
+
+            $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Card termination failed', $result['status'] ?? 400);
+            }
+
+            try {
+                $refundNgn = (float) data_get($result, 'data.termination.refund_ngn', 0);
+                $body = $refundNgn > 0
+                    ? 'Your virtual card has been terminated. ₦'.number_format($refundNgn, 2).' was credited to your Naira wallet.'
+                    : 'Your virtual card has been terminated successfully.';
+                NotificationHelper::createTransactionNotification(
+                    $request->user(),
+                    'virtual_card',
+                    'Virtual Card Terminated',
+                    $body,
+                    ['action' => 'terminate_card']
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Visa virtual card terminate notification failed: '.$e->getMessage());
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Card terminated successfully.');
+        } catch (\Exception $e) {
+            Log::error('Terminate Visa card error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while terminating the card.');
+        }
+    }
+
     #[OA\Post(path: '/api/virtual-cards/visa-card/{id}/unfreeze', summary: 'Unfreeze Visa card', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
     public function unfreeze(Request $request, int $id): JsonResponse
     {

@@ -15,6 +15,7 @@ use App\Services\Admin\CardLoadProfitCalculator;
 use App\Services\Platform\PlatformRateResolver;
 use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\Wallet\WalletService;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -23,6 +24,10 @@ class VirtualCardService
     public const PLATFORM_VISA_CREATION = 'visa_creation';
 
     public const PLATFORM_VISA_FUND = 'visa_fund';
+
+    public const PLATFORM_TERMINATE = 'terminate';
+
+    public const PLATFORM_VISA_TERMINATE = 'visa_terminate';
 
     public function __construct(
         protected MastercardApiClient $mastercardApiClient,
@@ -701,6 +706,11 @@ class VirtualCardService
     protected function fundPlatformServiceKeyForCard(VirtualCard $card): string
     {
         return $this->isVisaCard($card) ? self::PLATFORM_VISA_FUND : 'fund';
+    }
+
+    protected function terminatePlatformServiceKeyForCard(VirtualCard $card): string
+    {
+        return $this->isVisaCard($card) ? self::PLATFORM_VISA_TERMINATE : self::PLATFORM_TERMINATE;
     }
 
     protected function resolveCreationFeeUsd(): float
@@ -1537,32 +1547,135 @@ class VirtualCardService
     }
 
     /**
-     * Terminate card via provider.
+     * Quote card termination refund (sell rate + termination fee).
+     *
+     * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
      */
-    public function terminateCard(int $userId, int $cardId): array
+    public function estimateCardTermination(int $userId, int $cardId): array
     {
-        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
-        if (! $card->provider_card_id) {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
+        if (! $card) {
             return [
                 'success' => false,
-                'message' => 'This card is missing provider metadata.',
+                'message' => 'Virtual card not found.',
+                'status' => 404,
             ];
         }
 
-        if ($this->isVisaCard($card)) {
+        if (! $card->is_active) {
             return [
                 'success' => false,
-                'message' => 'Card termination via the app is not available for Visa virtual cards with the current provider.',
+                'message' => 'This card is already inactive.',
                 'status' => 422,
             ];
         }
 
-        $user = User::findOrFail($userId);
+        if (! $card->provider_card_id) {
+            return [
+                'success' => false,
+                'message' => 'This card is missing provider metadata.',
+                'status' => 422,
+            ];
+        }
+
+        $this->syncCardBalanceWithProviderDetails($userId, $cardId);
+        $card->refresh();
+
+        $quote = $this->buildTerminationQuote($card);
+
+        return [
+            'success' => true,
+            'message' => 'Termination estimate retrieved successfully.',
+            'data' => $quote,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function buildTerminationQuote(VirtualCard $card): array
+    {
+        $serviceKey = $this->terminatePlatformServiceKeyForCard($card);
+        $rateRow = $this->platformRates->findVirtualCard($serviceKey);
+        $terminationFeeUsd = $rateRow && $rateRow->fee_usd !== null
+            ? round((float) $rateRow->fee_usd, 2)
+            : (float) config('virtual_card.terminate_fee_usd', 1.0);
+        $sellRate = $rateRow && $rateRow->exchange_rate_ngn_per_usd !== null
+            ? (float) $rateRow->exchange_rate_ngn_per_usd
+            : (float) config('virtual_card.terminate_sell_rate_ngn_per_usd', 1420.0);
+
+        $balanceUsd = round(max(0, (float) $card->balance), 2);
+        $refundableUsd = round(max(0, $balanceUsd - $terminationFeeUsd), 2);
+        $refundNgn = round($refundableUsd * $sellRate, 2);
+        $canTerminate = $balanceUsd + 0.0001 >= $terminationFeeUsd;
+
+        return [
+            'card_id' => (int) $card->id,
+            'card_scheme' => $this->isVisaCard($card) ? 'visa' : 'mastercard',
+            'card_balance_usd' => $balanceUsd,
+            'termination_fee_usd' => $terminationFeeUsd,
+            'refundable_usd' => $refundableUsd,
+            'sell_rate_ngn_per_usd' => $sellRate,
+            'refund_ngn' => $refundNgn,
+            'refund_currency' => 'NGN',
+            'can_terminate' => $canTerminate,
+            'minimum_balance_usd' => $terminationFeeUsd,
+        ];
+    }
+
+    /**
+     * Terminate card via provider and credit Naira wallet refund.
+     */
+    public function terminateCard(int $userId, int $cardId): array
+    {
+        $lock = Cache::lock("virtual-card-terminate:{$cardId}", 60);
+
         try {
-            $response = $this->mastercardApiClient->terminateMerchantMasterCard([
-                'email' => $user->email,
-                'cardid' => $card->provider_card_id,
-            ]);
+            return $lock->block(10, function () use ($userId, $cardId) {
+                return $this->executeCardTermination($userId, $cardId);
+            });
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
+            return [
+                'success' => false,
+                'message' => 'Card termination is already in progress. Please wait a moment and try again.',
+                'status' => 409,
+            ];
+        }
+    }
+
+    /**
+     * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
+     */
+    protected function executeCardTermination(int $userId, int $cardId): array
+    {
+        $estimate = $this->estimateCardTermination($userId, $cardId);
+        if (! $estimate['success']) {
+            return $estimate;
+        }
+
+        $quote = $estimate['data'];
+        if (! ($quote['can_terminate'] ?? false)) {
+            $min = (float) ($quote['minimum_balance_usd'] ?? 1.0);
+
+            return [
+                'success' => false,
+                'message' => 'Your card balance must be at least $'.number_format($min, 2).' to cover the termination fee.',
+                'status' => 422,
+                'data' => $quote,
+            ];
+        }
+
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
+        $user = User::findOrFail($userId);
+        $payload = [
+            'email' => $this->resolveProviderAccountEmail($user, $card),
+            'cardid' => $card->provider_card_id,
+        ];
+
+        try {
+            $response = $this->isVisaCard($card)
+                ? $this->visaCardApiClient->terminateCard($payload)
+                : $this->mastercardApiClient->terminateMerchantMasterCard($payload);
         } catch (MastercardApiException $exception) {
             return [
                 'success' => false,
@@ -1570,17 +1683,129 @@ class VirtualCardService
             ];
         }
 
-        $card->update([
-            'is_active' => false,
-            'provider_status' => $this->extractStatus($response, 'terminated'),
-            'provider_payload' => $response,
-        ]);
+        $refundNgn = (float) ($quote['refund_ngn'] ?? 0);
+        $refundableUsd = (float) ($quote['refundable_usd'] ?? 0);
+        $terminationFeeUsd = (float) ($quote['termination_fee_usd'] ?? 1.0);
+        $sellRate = (float) ($quote['sell_rate_ngn_per_usd'] ?? 0);
+        $balanceUsd = (float) ($quote['card_balance_usd'] ?? 0);
+
+        try {
+            $transaction = DB::transaction(function () use (
+                $userId,
+                $card,
+                $quote,
+                $response,
+                $refundNgn,
+                $refundableUsd,
+                $terminationFeeUsd,
+                $sellRate,
+                $balanceUsd,
+            ) {
+                $lockedCard = VirtualCard::where('id', $card->id)
+                    ->where('user_id', $userId)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedCard || ! $lockedCard->is_active) {
+                    throw new \RuntimeException('Card is no longer active.');
+                }
+
+                if ($refundNgn > 0) {
+                    $wallet = FiatWallet::where('user_id', $userId)
+                        ->where('currency', 'NGN')
+                        ->where('country_code', 'NG')
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (! $wallet) {
+                        $wallet = $this->walletService->getFiatWallet($userId, 'NGN', 'NG');
+                        $wallet = FiatWallet::where('id', $wallet->id)->lockForUpdate()->first();
+                    }
+
+                    $wallet->increment('balance', $refundNgn);
+                }
+
+                $transaction = Transaction::create([
+                    'user_id' => $userId,
+                    'transaction_id' => Transaction::generateTransactionId(),
+                    'type' => 'card_refund',
+                    'category' => 'virtual_card',
+                    'status' => 'completed',
+                    'currency' => 'NGN',
+                    'amount' => $refundNgn,
+                    'fee' => 0,
+                    'total_amount' => $refundNgn,
+                    'reference' => 'TRM'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                    'description' => 'Virtual card termination refund: $'.number_format($refundableUsd, 2)
+                        .' USD credited to Naira wallet',
+                    'metadata' => [
+                        'virtual_card_id' => $lockedCard->id,
+                        'provider_card_id' => $lockedCard->provider_card_id,
+                        'card_balance_usd' => $balanceUsd,
+                        'termination_fee_usd' => $terminationFeeUsd,
+                        'refundable_usd' => $refundableUsd,
+                        'sell_rate_ngn_per_usd' => $sellRate,
+                        'refund_ngn' => $refundNgn,
+                        'card_scheme' => $quote['card_scheme'] ?? ($this->isVisaCard($lockedCard) ? 'visa' : 'mastercard'),
+                        'provider_payload' => $response,
+                    ],
+                ]);
+
+                VirtualCardTransaction::create([
+                    'virtual_card_id' => $lockedCard->id,
+                    'user_id' => $userId,
+                    'transaction_id' => $transaction->id,
+                    'provider_transaction_id' => (string) ($this->extractProviderReference($response) ?? ''),
+                    'type' => 'refund',
+                    'status' => 'completed',
+                    'currency' => 'USD',
+                    'amount' => $refundableUsd,
+                    'fee' => $terminationFeeUsd,
+                    'total_amount' => $balanceUsd,
+                    'payment_wallet_type' => 'naira_wallet',
+                    'payment_wallet_currency' => 'NGN',
+                    'exchange_rate' => $sellRate,
+                    'reference' => $transaction->reference,
+                    'description' => 'Card terminated — balance refunded to Naira wallet',
+                    'metadata' => [
+                        'termination_quote' => $quote,
+                        'refund_ngn' => $refundNgn,
+                    ],
+                    'provider_payload' => $response,
+                ]);
+
+                $lockedCard->update([
+                    'is_active' => false,
+                    'balance' => 0,
+                    'provider_status' => $this->extractStatus($response, 'terminated'),
+                    'provider_payload' => $response,
+                ]);
+
+                return $transaction;
+            });
+        } catch (\Throwable $e) {
+            Log::critical('Virtual card terminated at provider but wallet bookkeeping failed', [
+                'user_id' => $userId,
+                'card_id' => $cardId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'The card was terminated at the provider, but crediting your Naira wallet failed. Please contact support immediately.',
+                'status' => 500,
+            ];
+        }
+
+        $freshCard = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
 
         return [
             'success' => true,
             'message' => $response['message'] ?? 'Card terminated successfully',
             'data' => [
-                'card' => $card->fresh(),
+                'card' => $freshCard,
+                'termination' => $quote,
+                'transaction' => $transaction,
                 'provider_response' => $response,
             ],
         ];

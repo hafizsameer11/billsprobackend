@@ -61,6 +61,8 @@ class AdminPlatformRateController extends Controller
             ['key' => 'visa_creation', 'label' => 'Visa — card issuance'],
             ['key' => 'visa_fund', 'label' => 'Visa — card funding'],
             ['key' => 'visa_decline_fee', 'label' => 'Visa — decline fee (2nd+)'],
+            ['key' => 'terminate', 'label' => 'Mastercard — termination refund (sell rate)'],
+            ['key' => 'visa_terminate', 'label' => 'Visa — termination refund (sell rate)'],
             ['key' => 'withdraw', 'label' => 'Withdraw from card (legacy)'],
         ];
 

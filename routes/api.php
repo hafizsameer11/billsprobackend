@@ -418,6 +418,8 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::post('/', [VisaVirtualCardController::class, 'create']);
         Route::get('/{id}', [VisaVirtualCardController::class, 'show'])->whereNumber('id');
         Route::post('/{id}/fund', [VisaVirtualCardController::class, 'fund'])->whereNumber('id');
+        Route::get('/{id}/terminate-estimate', [VisaVirtualCardController::class, 'terminateEstimate'])->whereNumber('id');
+        Route::post('/{id}/terminate', [VisaVirtualCardController::class, 'terminate'])->whereNumber('id');
         Route::get('/{id}/transactions', [VisaVirtualCardController::class, 'transactions'])->whereNumber('id');
         Route::post('/{id}/freeze', [VisaVirtualCardController::class, 'freeze'])->whereNumber('id');
         Route::post('/{id}/unfreeze', [VisaVirtualCardController::class, 'unfreeze'])->whereNumber('id');
@@ -436,6 +438,7 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/{id}', [VirtualCardController::class, 'show']);
         Route::post('/{id}/fund', [VirtualCardController::class, 'fund']);
         Route::post('/{id}/withdraw', [VirtualCardController::class, 'withdraw']);
+        Route::get('/{id}/terminate-estimate', [VirtualCardController::class, 'terminateEstimate']);
         Route::get('/{id}/transactions', [VirtualCardController::class, 'transactions']);
         Route::post('/{id}/terminate', [VirtualCardController::class, 'terminate']);
         Route::get('/{id}/check-3ds', [VirtualCardController::class, 'check3ds']);

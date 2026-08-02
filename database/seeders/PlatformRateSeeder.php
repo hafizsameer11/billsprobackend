@@ -25,6 +25,8 @@ class PlatformRateSeeder extends Seeder
         $creationFeeUsd = (float) config('virtual_card.creation_fee_usd', 3.0);
         $fundFlatUsd = (float) config('virtual_card.fund_load_flat_fee_usd', 1.0);
         $fundPct = (float) config('virtual_card.fund_load_percent', 1.0);
+        $terminateSellRate = (float) config('virtual_card.terminate_sell_rate_ngn_per_usd', 1420.0);
+        $terminateFeeUsd = (float) config('virtual_card.terminate_fee_usd', 1.0);
 
         $sendFeeUsd = CryptoService::SEND_FEE_USD;
 
@@ -179,6 +181,30 @@ class PlatformRateSeeder extends Seeder
                 'percentage_fee' => $fundPct,
                 'min_fee_ngn' => null,
                 'fee_usd' => $fundFlatUsd,
+            ],
+            [
+                'category' => 'virtual_card',
+                'service_key' => 'terminate',
+                'sub_service_key' => null,
+                'crypto_asset' => null,
+                'network_key' => null,
+                'exchange_rate_ngn_per_usd' => $terminateSellRate,
+                'fixed_fee_ngn' => 0,
+                'percentage_fee' => null,
+                'min_fee_ngn' => null,
+                'fee_usd' => $terminateFeeUsd,
+            ],
+            [
+                'category' => 'virtual_card',
+                'service_key' => 'visa_terminate',
+                'sub_service_key' => null,
+                'crypto_asset' => null,
+                'network_key' => null,
+                'exchange_rate_ngn_per_usd' => $terminateSellRate,
+                'fixed_fee_ngn' => 0,
+                'percentage_fee' => null,
+                'min_fee_ngn' => null,
+                'fee_usd' => $terminateFeeUsd,
             ],
         ];
 

@@ -601,6 +601,31 @@ class VirtualCardController extends Controller
     }
 
     /**
+     * Terminate card estimate
+     */
+    #[OA\Get(path: '/api/virtual-cards/{id}/terminate-estimate', summary: 'Estimate card termination refund', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    public function terminateEstimate(Request $request, int $id): JsonResponse
+    {
+        try {
+            $result = $this->virtualCardService->estimateCardTermination($request->user()->id, $id);
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to estimate termination', $result['status'] ?? 400);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Termination estimate retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
+        } catch (\Exception $e) {
+            Log::error('Terminate estimate error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while estimating card termination.');
+        }
+    }
+
+    /**
      * Terminate card
      */
     #[OA\Post(path: '/api/virtual-cards/{id}/terminate', summary: 'Terminate virtual card', description: 'Calls provider **terminate digital** (`terminatedigital`); marks local card inactive.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
@@ -613,15 +638,19 @@ class VirtualCardController extends Controller
         try {
             $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
             if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card termination failed', 400);
+                return ResponseHelper::error($result['message'] ?? 'Card termination failed', $result['status'] ?? 400);
             }
 
             try {
+                $refundNgn = (float) data_get($result, 'data.termination.refund_ngn', 0);
+                $body = $refundNgn > 0
+                    ? 'Your virtual card has been terminated. ₦'.number_format($refundNgn, 2).' was credited to your Naira wallet.'
+                    : 'Your virtual card has been terminated successfully.';
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
                     'Virtual Card Terminated',
-                    'Your virtual card has been terminated successfully.',
+                    $body,
                     ['action' => 'terminate_card']
                 );
             } catch (\Throwable $e) {
