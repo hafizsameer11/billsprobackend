@@ -9,6 +9,7 @@ use App\Models\VirtualCard;
 use App\Models\VirtualCardProviderWebhookEvent;
 use App\Models\VirtualCardTransaction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -31,8 +32,8 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             'cvv' => '123',
             'expiry_month' => '12',
             'expiry_year' => '2030',
-            'card_type' => 'mastercard',
-            'provider' => 'pagocards',
+            'card_type' => 'visa',
+            'provider' => 'pagocards_visa',
             'provider_card_id' => $providerCardId,
             'provider_status' => 'active',
             'card_color' => 'green',
@@ -201,6 +202,27 @@ class PagocardsVirtualCardWebhookTest extends TestCase
         $user = User::factory()->create();
         $card = $this->makeVirtualCardForUser($user, '019f-card-decline');
         $providerTransactionId = 'provider-decline-1';
+
+        Http::fake([
+            '*/visacard/getcard*' => Http::response([
+                'secure' => [
+                    'success' => true,
+                    'data' => [
+                        'details' => ['balance' => 0],
+                        'transactions' => [
+                            [
+                                'type' => 'withdrawal',
+                                'status' => 'completed',
+                                'amount' => 0.5,
+                                'description' => 'Decline Fees',
+                                'reference' => 'declinecharge-test-1',
+                                'created_at' => now()->toIso8601String(),
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
 
         $this->postJson($this->webhookUrl(), [
             'event' => 'virtualcard.transaction.declined',

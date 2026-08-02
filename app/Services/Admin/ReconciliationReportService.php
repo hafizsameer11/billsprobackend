@@ -31,7 +31,7 @@ class ReconciliationReportService
     private const LEDGER_CREDIT_TYPES = ['deposit', 'card_refund', 'refund', 'reversal', 'bonus', 'cashback'];
 
     /** Naira transaction types that take money out of the wallet. */
-    private const LEDGER_DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding'];
+    private const LEDGER_DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding', 'card_decline_fee'];
 
     /**
      * Book-keeping rows that explain a wallet correction rather than a new money movement.

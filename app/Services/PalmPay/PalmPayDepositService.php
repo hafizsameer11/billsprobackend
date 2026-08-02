@@ -5,6 +5,7 @@ namespace App\Services\PalmPay;
 use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Services\Admin\TransactionPricingSnapshotService;
+use App\Services\VirtualCard\DeclineFeeRecoveryService;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\PalmPayDepositOrder;
@@ -20,6 +21,7 @@ class PalmPayDepositService
     public function __construct(
         protected PalmPayCheckoutService $checkout,
         protected TransactionPricingSnapshotService $pricingSnapshots,
+        protected DeclineFeeRecoveryService $declineFeeRecovery,
     ) {}
 
     /**
@@ -218,7 +220,10 @@ class PalmPayDepositService
                 $fiatWallet = FiatWallet::where('id', $fiatWallet->id)->lockForUpdate()->first();
             }
 
+            $balanceBefore = (float) $fiatWallet->balance;
             $fiatWallet->increment('balance', $creditAmount);
+            $balanceAfter = (float) $fiatWallet->fresh()->balance;
+            $this->declineFeeRecovery->handlePostDepositRecovery($userId, $balanceBefore, $balanceAfter);
 
             $transaction = Transaction::create([
                 'user_id' => $userId,

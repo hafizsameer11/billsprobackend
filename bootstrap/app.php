@@ -28,5 +28,6 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withSchedule(function (Schedule $schedule) {
         $schedule->job(new SyncWalletCurrencyRatesFromCoinMarketCapJob)->everyFifteenMinutes();
+        $schedule->command('pagocards:reconcile-decline-fees')->hourly();
     })
     ->create();

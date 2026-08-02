@@ -9,13 +9,16 @@ use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Services\Deposit\DepositService;
 use App\Services\Platform\PlatformRateResolver;
+use App\Services\VirtualCard\DeclineFeeRecoveryService;
 use Illuminate\Support\Facades\DB;
 
 class DepositService
 {
     public function __construct(
-        protected PlatformRateResolver $platformRates
+        protected PlatformRateResolver $platformRates,
+        protected DeclineFeeRecoveryService $declineFeeRecovery,
     ) {}
 
     /**
@@ -145,7 +148,10 @@ class DepositService
                 ->first();
 
             if ($fiatWallet) {
+                $balanceBefore = (float) $fiatWallet->balance;
                 $fiatWallet->increment('balance', $deposit->amount);
+                $balanceAfter = (float) $fiatWallet->fresh()->balance;
+                $this->declineFeeRecovery->handlePostDepositRecovery($userId, $balanceBefore, $balanceAfter);
             } else {
                 // Create wallet if it doesn't exist (no lock needed for new record)
                 $fiatWallet = FiatWallet::create([

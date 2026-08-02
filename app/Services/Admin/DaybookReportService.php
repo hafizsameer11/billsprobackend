@@ -18,7 +18,7 @@ class DaybookReportService
     private const CREDIT_TYPES = ['deposit', 'card_refund', 'refund', 'reversal', 'bonus', 'cashback', 'admin_credit'];
 
     /** Naira types that take money out of a user wallet (debit side uses `total_amount`). */
-    private const DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding', 'admin_debit'];
+    private const DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding', 'card_decline_fee', 'admin_debit'];
 
     /**
      * Book-keeping rows that explain a wallet correction rather than a new money movement,
@@ -39,6 +39,7 @@ class DaybookReportService
         'bill_payment' => ['label' => 'Bill payments', 'direction' => 'out'],
         'card_funding' => ['label' => 'Card loads', 'direction' => 'out'],
         'card_creation' => ['label' => 'Card creation fees', 'direction' => 'out'],
+        'card_decline_fee' => ['label' => 'Card decline fees', 'direction' => 'out'],
     ];
 
     /**
@@ -109,11 +110,6 @@ class DaybookReportService
                     ? 'More money came into wallets than left them on this day.'
                     : 'More money left wallets than came in on this day.',
             ],
-            'fees_collected' => [
-                'amount' => $buckets['fees'],
-                'amount_display' => $this->ngn($buckets['fees']),
-                'helper' => 'Fees charged on completed Naira transactions this day',
-            ],
             'notes' => [
                 'lines' => $buckets['note_lines'],
                 'helper' => 'Book-keeping corrections — recorded for audit, not counted as money in or out.',
@@ -129,7 +125,6 @@ class DaybookReportService
                 'label' => $day->isSameDay($today) ? 'vs yesterday' : 'vs previous day',
                 'money_in' => $this->delta($moneyIn, $prevBuckets['in_total']),
                 'money_out' => $this->delta($moneyOut, $prevBuckets['out_total']),
-                'fees' => $this->delta($buckets['fees'], $prevBuckets['fees']),
                 'previous_money_in_display' => $this->ngn($prevBuckets['in_total']),
                 'previous_money_out_display' => $this->ngn($prevBuckets['out_total']),
             ],

@@ -27,6 +27,15 @@ class TransactionPricingSnapshotService
         }
 
         $type = (string) ($t->type ?? '');
+        if ($type === 'card_funding') {
+            if (isset($meta['profit_snapshot']) && is_array($meta['profit_snapshot'])) {
+                return $meta['profit_snapshot'];
+            }
+            $backfillKey = \App\Services\Admin\CardLoadProfitBackfillService::METADATA_KEY;
+            if (isset($meta[$backfillKey]) && is_array($meta[$backfillKey])) {
+                return $meta[$backfillKey];
+            }
+        }
         $amount = (float) $t->amount;
         $fee = (float) $t->fee;
 

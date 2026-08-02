@@ -20,6 +20,14 @@ class ProfitReportingService
     {
         $meta = is_array($t->metadata) ? $t->metadata : [];
         $snap = $meta['pricing_snapshot'] ?? null;
+        if (! is_array($snap) && (string) ($t->type ?? '') === 'card_funding') {
+            $backfillKey = \App\Services\Admin\CardLoadProfitBackfillService::METADATA_KEY;
+            if (isset($meta[$backfillKey]) && is_array($meta[$backfillKey])) {
+                $snap = $meta[$backfillKey];
+            } elseif (isset($meta['profit_snapshot']) && is_array($meta['profit_snapshot'])) {
+                $snap = $meta['profit_snapshot'];
+            }
+        }
         if (! is_array($snap)) {
             $snap = $this->snapshots->buildForTransaction($t);
         }

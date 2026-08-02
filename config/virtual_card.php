@@ -50,6 +50,17 @@ return [
     'fund_load_percent' => (float) env('VIRTUAL_CARD_FUND_LOAD_PERCENT', 1.0),
 
     /*
+    | Merchant-paid decline fee recovery (Pagocards visa wallet subsidizes user card).
+    */
+    'decline_fee_recovery_enabled' => filter_var(env('VIRTUAL_CARD_DECLINE_FEE_RECOVERY_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+    'max_merchant_paid_decline_fees' => (int) env('VIRTUAL_CARD_MAX_MERCHANT_PAID_DECLINE_FEES', 3),
+    'auto_freeze_after_max_subsidies' => filter_var(env('VIRTUAL_CARD_AUTO_FREEZE_AFTER_MAX_SUBSIDIES', true), FILTER_VALIDATE_BOOLEAN),
+    'decline_fee_check_delays_minutes' => [2, 10, 30],
+    'decline_fee_billable_usd_fallback' => (float) env('VIRTUAL_CARD_DECLINE_FEE_BILLABLE_USD_FALLBACK', 1.0),
+    /** Do not charge users for Pagocards admin debits before this date (historical subsidies). */
+    'decline_fee_ignore_admin_before' => env('VIRTUAL_CARD_DECLINE_FEE_IGNORE_ADMIN_BEFORE', '2026-08-02 00:00:00'),
+
+    /*
     | Pagocards program billing — scheme-specific (Visa vs Mastercard).
     | `program_billing` mirrors Mastercard for backward compatibility (legacy env keys).
     */

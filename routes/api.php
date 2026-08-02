@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\AdminAdjustmentController;
 use App\Http\Controllers\Api\AdminBillPaymentController;
+use App\Http\Controllers\Api\AdminCardDeclineFeeController;
+use App\Http\Controllers\Api\AdminPagocardsWalletController;
 use App\Http\Controllers\Api\AdminCryptoExtensionController;
 use App\Http\Controllers\Api\AdminCryptoTreasuryController;
 use App\Http\Controllers\Api\AdminCryptoVendorController;
@@ -264,6 +266,16 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
 
         Route::get('/daybook', [AdminDaybookController::class, 'day']);
         Route::get('/daybook/transactions', [AdminDaybookController::class, 'transactions']);
+
+        Route::get('/card-decline-fees/summary', [AdminCardDeclineFeeController::class, 'summary']);
+        Route::get('/card-decline-fees/pagocards-wallet', [AdminCardDeclineFeeController::class, 'pagocardsWallet']);
+        Route::post('/card-decline-fees/reconcile', [AdminCardDeclineFeeController::class, 'reconcile']);
+        Route::get('/card-decline-fees', [AdminCardDeclineFeeController::class, 'index']);
+        Route::post('/card-decline-fees/{cardDeclineFee}/waive', [AdminCardDeclineFeeController::class, 'waive']);
+
+        Route::get('/pagocards-wallet/summary', [AdminPagocardsWalletController::class, 'summary']);
+        Route::get('/pagocards-wallet/recharges', [AdminPagocardsWalletController::class, 'recharges']);
+        Route::post('/pagocards-wallet/recharges', [AdminPagocardsWalletController::class, 'store']);
 
         Route::get('/commission/tiers', [AdminCommissionController::class, 'tiers']);
         Route::put('/commission/tiers/{tierKey}', [AdminCommissionController::class, 'updateTier']);

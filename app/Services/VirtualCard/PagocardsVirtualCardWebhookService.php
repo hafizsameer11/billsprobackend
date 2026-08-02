@@ -9,11 +9,16 @@ use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardProviderWebhookEvent;
 use App\Models\VirtualCardTransaction;
+use App\Services\VirtualCard\DeclineFeeRecoveryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class PagocardsVirtualCardWebhookService
 {
+    public function __construct(
+        protected DeclineFeeRecoveryService $declineFeeRecovery,
+    ) {}
+
     public const EVENT_TOKENIZATION = 'cardTokenization.deliverActivationCode';
 
     public const EVENT_3DS_CREATED = 'cardAuthentication.created';
@@ -134,12 +139,16 @@ class PagocardsVirtualCardWebhookService
             ]);
 
             if (! $duplicateTarget) {
-                $this->syncFinancialEvent($card, $eventName, $eventData, $payload);
+                $this->syncFinancialEvent($card, $eventName, $eventData, $payload, $externalEventId);
+            }
+
+            if (! $duplicateTarget && $eventName === self::EVENT_DECLINED) {
+                $this->declineFeeRecovery->scheduleDeclineCheck($card, $eventData);
             }
 
             if (! $duplicateTarget && $card->user_id) {
                 $user = User::query()->find($card->user_id);
-                if ($user) {
+                if ($user && $eventName !== self::EVENT_DECLINED_CHARGE) {
                     $this->notifyUser($user, $eventName, $eventData, $card->id, $externalEventId);
                 }
             }
@@ -309,8 +318,15 @@ class PagocardsVirtualCardWebhookService
         );
     }
 
-    private function syncFinancialEvent(VirtualCard $card, string $eventName, array $data, array $payload): void
+    private function syncFinancialEvent(VirtualCard $card, string $eventName, array $data, array $payload, string $externalEventId): void
     {
+        if ($eventName === self::EVENT_DECLINED_CHARGE) {
+            $payer = $this->declineFeeRecovery->handleDeclinedChargeWebhook($card, $data, $payload);
+            if ($payer !== DeclineFeeRecoveryService::PAYER_CARD) {
+                return;
+            }
+        }
+
         $definition = match ($eventName) {
             self::EVENT_SETTLEMENT => ['payment', 'completed', 'Card payment settlement'],
             self::EVENT_DECLINED, self::LEGACY_AUTHORIZATION_REJECTED => ['payment', 'failed', 'Declined card payment'],
@@ -391,6 +407,13 @@ class PagocardsVirtualCardWebhookService
         VirtualCardTransaction::query()->create(array_merge([
             'virtual_card_id' => $card->id,
         ], $attributes));
+
+        if ($eventName === self::EVENT_DECLINED_CHARGE && $card->user_id) {
+            $user = User::query()->find($card->user_id);
+            if ($user) {
+                $this->notifyUser($user, $eventName, $data, $card->id, $externalEventId);
+            }
+        }
     }
 
     private function eventAmount(string $eventName, array $data): float

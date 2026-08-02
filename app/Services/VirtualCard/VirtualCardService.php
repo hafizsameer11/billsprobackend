@@ -11,6 +11,7 @@ use App\Models\VirtualCard;
 use App\Models\VirtualCardProviderWebhookEvent;
 use App\Models\VirtualCardTransaction;
 use App\Services\Crypto\CryptoWalletService;
+use App\Services\Admin\CardLoadProfitCalculator;
 use App\Services\Platform\PlatformRateResolver;
 use App\Services\Platform\ServiceMaintenanceService;
 use App\Services\Wallet\WalletService;
@@ -30,6 +31,7 @@ class VirtualCardService
         protected CryptoWalletService $cryptoWalletService,
         protected PlatformRateResolver $platformRates,
         protected ServiceMaintenanceService $maintenance,
+        protected CardLoadProfitCalculator $cardLoadProfit,
     ) {}
 
     /**
@@ -995,6 +997,32 @@ class VirtualCardService
                     $feeUsdReporting += $processingNgn / max($rate, 0.0001);
                 }
 
+                $fundServiceKey = $this->fundPlatformServiceKeyForCard($freshCard);
+                $profitSnapshot = $this->cardLoadProfit->snapshotForNewFunding(
+                    array_merge($charges, ['payment_wallet_type' => $paymentWalletType]),
+                    $principalUsd,
+                    $fundServiceKey,
+                );
+
+                $metadata = [
+                    'card_id' => $freshCard->id,
+                    'provider_card_id' => $freshCard->provider_card_id,
+                    'principal_usd' => $principalUsd,
+                    'wallet_charge' => $charges,
+                    'payment_wallet_type' => $paymentWalletType,
+                    'payment_wallet_currency' => $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD',
+                    'exchange_rate_ngn_per_usd' => $rate,
+                    'card_funding_fee_usd' => (float) ($charges['card_funding_fee_usd'] ?? config('virtual_card.fund_load_flat_fee_usd', 1.0)),
+                    'billspro_transaction_fee_percent' => 0.0,
+                    'total_charge_ngn' => $paymentWalletType === 'naira_wallet' ? (float) ($charges['charge_ngn'] ?? 0) : null,
+                    'total_charge_usd' => $paymentWalletType === 'crypto_wallet' ? (float) ($charges['charge_usd'] ?? 0) : null,
+                    'provider_payload' => $response,
+                    'card_scheme' => $this->isVisaCard($freshCard) ? 'visa' : 'mastercard',
+                ];
+                if ($profitSnapshot !== null) {
+                    $metadata['profit_snapshot'] = $profitSnapshot;
+                }
+
                 $transaction = Transaction::create([
                     'user_id' => $userId,
                     'transaction_id' => Transaction::generateTransactionId(),
@@ -1008,21 +1036,7 @@ class VirtualCardService
                     'reference' => 'FUND'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
                     'description' => 'Virtual card load: $'.number_format($principalUsd, 2).' USD from '
                         .($paymentWalletType === 'naira_wallet' ? 'Naira' : 'Crypto').' wallet',
-                    'metadata' => [
-                        'card_id' => $freshCard->id,
-                        'provider_card_id' => $freshCard->provider_card_id,
-                        'principal_usd' => $principalUsd,
-                        'wallet_charge' => $charges,
-                        'payment_wallet_type' => $paymentWalletType,
-                        'payment_wallet_currency' => $paymentWalletType === 'naira_wallet' ? $fiatCurrency : 'USD',
-                        'exchange_rate_ngn_per_usd' => $rate,
-                        'card_funding_fee_usd' => (float) ($charges['card_funding_fee_usd'] ?? config('virtual_card.fund_load_flat_fee_usd', 1.0)),
-                        'billspro_transaction_fee_percent' => 0.0,
-                        'total_charge_ngn' => $paymentWalletType === 'naira_wallet' ? (float) ($charges['charge_ngn'] ?? 0) : null,
-                        'total_charge_usd' => $paymentWalletType === 'crypto_wallet' ? (float) ($charges['charge_usd'] ?? 0) : null,
-                        'provider_payload' => $response,
-                        'card_scheme' => $this->isVisaCard($freshCard) ? 'visa' : 'mastercard',
-                    ],
+                    'metadata' => $metadata,
                 ]);
 
                 VirtualCardTransaction::create([
