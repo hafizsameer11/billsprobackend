@@ -1793,8 +1793,20 @@ class VirtualCardService
 
         $balanceUsd = round(max(0, (float) $card->balance), 2);
         $refundableUsd = round(max(0, $balanceUsd - $terminationFeeUsd), 2);
-        $refundNgn = round($refundableUsd * $sellRate, 2);
+        $fundingRate = $this->isVisa493BinCard($card)
+            ? $this->visa493Withdrawal->lastFundingExchangeRateNgnPerUsd((int) $card->id, (int) $card->user_id)
+            : null;
+        $rateForRefund = $this->isVisa493BinCard($card) && $fundingRate !== null ? $fundingRate : $sellRate;
+        $refundNgn = round($refundableUsd * $rateForRefund, 2);
         $canTerminate = $balanceUsd + 0.0001 >= $terminationFeeUsd;
+        if ($this->isVisa493BinCard($card) && $refundableUsd >= 0.01 && $fundingRate === null) {
+            $canTerminate = false;
+        }
+
+        $blockReason = null;
+        if ($this->isVisa493BinCard($card) && $refundableUsd >= 0.01 && $fundingRate === null) {
+            $blockReason = 'Fund this card from your Naira wallet at least once before terminating with a balance.';
+        }
 
         return [
             'card_id' => (int) $card->id,
@@ -1802,11 +1814,14 @@ class VirtualCardService
             'card_balance_usd' => $balanceUsd,
             'termination_fee_usd' => $terminationFeeUsd,
             'refundable_usd' => $refundableUsd,
-            'sell_rate_ngn_per_usd' => $sellRate,
+            'sell_rate_ngn_per_usd' => $rateForRefund,
             'refund_ngn' => $refundNgn,
             'refund_currency' => 'NGN',
             'can_terminate' => $canTerminate,
             'minimum_balance_usd' => $terminationFeeUsd,
+            'refund_via' => $this->isVisa493BinCard($card) ? 'withdraw_webhook' : 'immediate',
+            'exchange_rate_source' => $this->isVisa493BinCard($card) ? 'last_funding' : 'terminate_sell',
+            'block_reason' => $blockReason,
         ];
     }
 
@@ -1853,6 +1868,10 @@ class VirtualCardService
         }
 
         $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->firstOrFail();
+        if ($this->isVisa493BinCard($card)) {
+            return $this->execute493BinCardTermination($userId, $card, $quote);
+        }
+
         $user = User::findOrFail($userId);
         $payload = [
             'email' => $this->resolveProviderAccountEmail($user, $card),
@@ -1993,6 +2012,112 @@ class VirtualCardService
                 'card' => $freshCard,
                 'termination' => $quote,
                 'transaction' => $transaction,
+                'provider_response' => $response,
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $quote
+     * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
+     */
+    protected function execute493BinCardTermination(int $userId, VirtualCard $card, array $quote): array
+    {
+        $user = User::findOrFail($userId);
+        $refundableUsd = (float) ($quote['refundable_usd'] ?? 0);
+        $terminationFeeUsd = (float) ($quote['termination_fee_usd'] ?? 1.0);
+        $withdrawalTransaction = null;
+
+        if ($refundableUsd >= 0.01) {
+            $withdrawResult = $this->visa493Withdrawal->initiateForTermination($userId, (int) $card->id, $refundableUsd);
+            if (! ($withdrawResult['success'] ?? false)) {
+                return $withdrawResult;
+            }
+
+            $withdrawalTransaction = $withdrawResult['data']['transaction'] ?? null;
+            $card->refresh();
+            $this->syncCardBalanceWithProviderDetails($userId, (int) $card->id);
+            $card->refresh();
+        }
+
+        try {
+            $response = $this->terminateVisaCardAtProvider($card, $user);
+        } catch (MastercardApiException $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ];
+        }
+
+        try {
+            DB::transaction(function () use ($userId, $card, $quote, $response, $terminationFeeUsd, $refundableUsd, $withdrawalTransaction) {
+                $lockedCard = VirtualCard::where('id', $card->id)
+                    ->where('user_id', $userId)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedCard || ! $lockedCard->is_active) {
+                    throw new \RuntimeException('Card is no longer active.');
+                }
+
+                VirtualCardTransaction::create([
+                    'virtual_card_id' => $lockedCard->id,
+                    'user_id' => $userId,
+                    'transaction_id' => $withdrawalTransaction?->id,
+                    'provider_transaction_id' => (string) ($this->extractProviderReference($response) ?? ''),
+                    'type' => 'refund',
+                    'status' => 'completed',
+                    'currency' => 'USD',
+                    'amount' => $refundableUsd,
+                    'fee' => $terminationFeeUsd,
+                    'total_amount' => (float) ($quote['card_balance_usd'] ?? 0),
+                    'payment_wallet_type' => 'naira_wallet',
+                    'payment_wallet_currency' => 'NGN',
+                    'exchange_rate' => (float) ($quote['sell_rate_ngn_per_usd'] ?? 0),
+                    'reference' => 'TRM'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                    'description' => 'Card terminated — balance withdrawn to Naira wallet after provider confirmation',
+                    'metadata' => [
+                        'termination_quote' => $quote,
+                        'refund_ngn' => (float) ($quote['refund_ngn'] ?? 0),
+                        'refund_via' => 'withdraw_webhook',
+                        'withdrawal_transaction_id' => $withdrawalTransaction?->id,
+                    ],
+                    'provider_payload' => $response,
+                ]);
+
+                $lockedCard->update([
+                    'is_active' => false,
+                    'balance' => 0,
+                    'provider_status' => $this->extractStatus($response, 'terminated'),
+                    'provider_payload' => $response,
+                ]);
+            });
+        } catch (\Throwable $e) {
+            Log::critical('493 BIN card terminated at provider but local bookkeeping failed', [
+                'user_id' => $userId,
+                'card_id' => $card->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'The card was terminated at the provider, but updating your account failed. Please contact support immediately.',
+                'status' => 500,
+            ];
+        }
+
+        $freshCard = VirtualCard::where('id', $card->id)->where('user_id', $userId)->first();
+        $message = $refundableUsd >= 0.01
+            ? 'Your card has been terminated. The refundable balance will be credited to your Naira wallet after provider confirmation.'
+            : ($response['message'] ?? 'Card terminated successfully');
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'data' => [
+                'card' => $freshCard,
+                'termination' => $quote,
+                'withdrawal_transaction' => $withdrawalTransaction,
                 'provider_response' => $response,
             ],
         ];

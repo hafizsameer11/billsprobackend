@@ -83,12 +83,36 @@ class VirtualCard493WithdrawalService
      */
     public function initiate(int $userId, int $cardId, float $amountUsd): array
     {
+        return $this->initiateInternal($userId, $cardId, $amountUsd, false, true);
+    }
+
+    public function initiateForTermination(int $userId, int $cardId, float $amountUsd): array
+    {
+        return $this->initiateInternal($userId, $cardId, $amountUsd, true, false);
+    }
+
+    public function lastFundingExchangeRateNgnPerUsd(int $virtualCardId, int $userId): ?float
+    {
+        return $this->resolveLastFundingExchangeRateNgnPerUsd($virtualCardId, $userId);
+    }
+
+    protected function initiateInternal(
+        int $userId,
+        int $cardId,
+        float $amountUsd,
+        bool $forTermination,
+        bool $useLock
+    ): array {
+        $runner = fn (): array => $this->executeWithdrawal($userId, $cardId, $amountUsd, $forTermination);
+
+        if (! $useLock) {
+            return $runner();
+        }
+
         $lock = Cache::lock("virtual-card-withdraw:{$cardId}", 60);
 
         try {
-            return $lock->block(10, function () use ($userId, $cardId, $amountUsd) {
-                return $this->executeWithdrawal($userId, $cardId, $amountUsd);
-            });
+            return $lock->block(10, $runner);
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
             return [
                 'success' => false,
@@ -150,7 +174,7 @@ class VirtualCard493WithdrawalService
     /**
      * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
      */
-    protected function executeWithdrawal(int $userId, int $cardId, float $amountUsd): array
+    protected function executeWithdrawal(int $userId, int $cardId, float $amountUsd, bool $forTermination = false): array
     {
         $estimate = $this->estimate($userId, $cardId, $amountUsd);
         if (! $estimate['success']) {
@@ -164,7 +188,7 @@ class VirtualCard493WithdrawalService
         $refundNgn = (float) $quote['refund_ngn'];
         $reference = 'WD'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12));
 
-        if ($this->findOldestPendingWithdrawal($cardId, $userId)) {
+        if (! $forTermination && $this->findOldestPendingWithdrawal($cardId, $userId)) {
             return [
                 'success' => false,
                 'message' => 'You already have a withdrawal awaiting confirmation. Please wait for it to complete.',
@@ -173,7 +197,7 @@ class VirtualCard493WithdrawalService
         }
 
         try {
-            $pending = DB::transaction(function () use ($userId, $card, $amountUsd, $exchangeRate, $refundNgn, $reference, $quote) {
+            $pending = DB::transaction(function () use ($userId, $card, $amountUsd, $exchangeRate, $refundNgn, $reference, $quote, $forTermination) {
                 $lockedCard = VirtualCard::where('id', $card->id)
                     ->where('user_id', $userId)
                     ->lockForUpdate()
@@ -199,7 +223,9 @@ class VirtualCard493WithdrawalService
                     'fee' => 0,
                     'total_amount' => $amountUsd,
                     'reference' => $reference,
-                    'description' => 'Virtual card withdrawal pending provider confirmation',
+                    'description' => $forTermination
+                        ? 'Card termination balance withdrawal pending provider confirmation'
+                        : 'Virtual card withdrawal pending provider confirmation',
                     'metadata' => [
                         'virtual_card_id' => $lockedCard->id,
                         'provider_card_id' => $lockedCard->provider_card_id,
@@ -208,6 +234,7 @@ class VirtualCard493WithdrawalService
                         'expected_refund_ngn' => $refundNgn,
                         'refund_currency' => 'NGN',
                         'settlement_status' => 'awaiting_webhook',
+                        'initiated_for_termination' => $forTermination,
                         'card_scheme' => 'visa',
                         'pagocards_visa_api' => VirtualCardService::PAGOCARDS_VISA_API_493,
                     ],
@@ -228,10 +255,13 @@ class VirtualCard493WithdrawalService
                     'payment_wallet_currency' => 'NGN',
                     'exchange_rate' => $exchangeRate,
                     'reference' => $reference,
-                    'description' => 'Card withdrawal to Naira wallet (pending confirmation)',
+                    'description' => $forTermination
+                        ? 'Card termination balance withdrawal (pending confirmation)'
+                        : 'Card withdrawal to Naira wallet (pending confirmation)',
                     'metadata' => [
                         'expected_refund_ngn' => $refundNgn,
                         'withdrawal_quote' => $quote,
+                        'initiated_for_termination' => $forTermination,
                     ],
                 ]);
 
@@ -293,7 +323,9 @@ class VirtualCard493WithdrawalService
 
         return [
             'success' => true,
-            'message' => 'Your withdrawal request has been processed. Your Naira wallet will be credited once the provider confirms the transaction.',
+            'message' => $forTermination
+                ? 'Card balance withdrawn. Your card will now be terminated and your Naira wallet will be credited after provider confirmation.'
+                : 'Your withdrawal request has been processed. Your Naira wallet will be credited once the provider confirms the transaction.',
             'data' => [
                 'card' => $card->fresh(),
                 'withdrawal' => $quote,

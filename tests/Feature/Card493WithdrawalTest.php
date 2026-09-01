@@ -189,6 +189,51 @@ class Card493WithdrawalTest extends TestCase
         $this->assertEquals(16000.0, (float) $wallet->balance);
     }
 
+    public function test_terminate_493_withdraws_balance_before_provider_terminate(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::sequence()
+                ->push(['status' => 'success', 'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 25]]], 200)
+                ->push(['status' => 'success', 'data' => ['reference' => 'provider-term-withdraw']], 200)
+                ->push(['status' => 'success', 'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 1]]], 200)
+                ->push(['status' => 'success', 'message' => 'Card terminated'], 200),
+            'https://pagocards.test/api/v1/cards/card_01withdraw493/withdraw' => Http::response([
+                'status' => 'success',
+                'data' => ['reference' => 'provider-term-withdraw'],
+            ], 200),
+            'https://pagocards.test/api/v1/cards/card_01withdraw493/terminate' => Http::response([
+                'status' => 'success',
+                'message' => 'Card terminated',
+            ], 200),
+        ]);
+
+        $user = User::factory()->create();
+        $card = $this->make493VisaCard($user, 25);
+        $this->seedFundingRate($user, $card, 1500.0);
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/virtual-cards/visa-card/{$card->id}/terminate");
+
+        $response->assertOk()->assertJsonPath('success', true);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://pagocards.test/api/v1/cards/card_01withdraw493/withdraw'
+            && (float) ($request['amount'] ?? 0) === 24.0);
+        Http::assertSent(fn ($request) => $request->url() === 'https://pagocards.test/api/v1/cards/card_01withdraw493/terminate');
+
+        $this->assertDatabaseHas('transactions', [
+            'user_id' => $user->id,
+            'type' => 'card_withdrawal',
+            'status' => 'pending',
+        ]);
+        $this->assertDatabaseMissing('transactions', [
+            'user_id' => $user->id,
+            'type' => 'card_refund',
+        ]);
+
+        $card->refresh();
+        $this->assertFalse($card->is_active);
+    }
+
     public function test_legacy_visa_card_withdraw_is_rejected(): void
     {
         $user = User::factory()->create();
