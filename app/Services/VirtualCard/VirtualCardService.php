@@ -42,6 +42,7 @@ class VirtualCardService
         protected PlatformRateResolver $platformRates,
         protected ServiceMaintenanceService $maintenance,
         protected CardLoadProfitCalculator $cardLoadProfit,
+        protected VirtualCard493WithdrawalService $visa493Withdrawal,
     ) {}
 
     /**
@@ -1305,14 +1306,25 @@ class VirtualCardService
     }
 
     /**
-     * Card withdrawal not supported by the current provider.
+     * Withdraw USD from a 493 BIN Visa card; Naira wallet is credited after provider webhook confirmation.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
+     */
+    public function estimateCardWithdrawal(int $userId, int $cardId, float $amountUsd): array
+    {
+        return $this->visa493Withdrawal->estimate($userId, $cardId, $amountUsd);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{success: bool, message?: string, status?: int, data?: array<string, mixed>}
      */
     public function withdrawFromCard(int $userId, int $cardId, array $data): array
     {
-        return [
-            'success' => false,
-            'message' => 'Card withdrawal is not supported for the current virtual card provider.',
-        ];
+        $amountUsd = round((float) ($data['amount'] ?? 0), 2);
+
+        return $this->visa493Withdrawal->initiate($userId, $cardId, $amountUsd);
     }
 
     /**

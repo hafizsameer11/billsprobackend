@@ -17,6 +17,7 @@ class PagocardsVirtualCardWebhookService
 {
     public function __construct(
         protected DeclineFeeRecoveryService $declineFeeRecovery,
+        protected VirtualCard493WithdrawalService $visa493Withdrawal,
     ) {}
 
     public const EVENT_TOKENIZATION = 'cardTokenization.deliverActivationCode';
@@ -163,6 +164,7 @@ class PagocardsVirtualCardWebhookService
 
             if (! $duplicateTarget) {
                 $this->syncFinancialEvent($card, $eventName, $eventData, $payload, $externalEventId);
+                $this->visa493Withdrawal->trySettleFromWebhook($card, $eventName, $eventData, $externalEventId);
             }
 
             if (! $duplicateTarget && $eventName === self::EVENT_DECLINED) {

@@ -378,13 +378,10 @@ class VirtualCardController extends Controller
         }
     }
 
-    /**
-     * Withdraw from virtual card
-     */
-    #[OA\Post(path: '/api/virtual-cards/{id}/withdraw', summary: 'Withdraw from virtual card', description: 'Legacy endpoint. The current provider flow does not support direct withdraw through this API.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    #[OA\Post(path: '/api/virtual-cards/{id}/withdraw', summary: 'Withdraw from 493 BIN Visa card', description: 'Submits a provider unload request. Naira wallet is credited after Pagocards webhook confirmation at the user\'s last card-funding rate.', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'Card ID', schema: new OA\Schema(type: 'integer', example: 1))]
     #[OA\RequestBody(required: true, content: new OA\JsonContent(required: ['amount'], properties: [new OA\Property(property: 'amount', type: 'number', format: 'float', example: 10.00, description: 'Amount in USD')]))]
-    #[OA\Response(response: 200, description: 'Backward-compatibility response shape', content: new OA\JsonContent(properties: [new OA\Property(property: 'success', type: 'boolean', example: true), new OA\Property(property: 'data', type: 'object')]))]
+    #[OA\Response(response: 200, description: 'Withdrawal request submitted')]
     #[OA\Response(response: 400, description: 'Operation not supported or invalid request')]
     #[OA\Response(response: 401, description: 'Unauthenticated')]
     #[OA\Response(response: 422, description: 'Validation error')]
@@ -394,23 +391,25 @@ class VirtualCardController extends Controller
             $result = $this->virtualCardService->withdrawFromCard($request->user()->id, $id, $request->validated());
 
             if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Withdrawal failed', 400);
+                return ResponseHelper::error($result['message'] ?? 'Withdrawal failed', $result['status'] ?? 400);
             }
 
             try {
-                $amount = $request->validated()['amount'] ?? null;
+                $amount = (float) ($request->validated()['amount'] ?? 0);
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
-                    'Virtual Card Withdrawal',
-                    $amount ? MoneyFormatHelper::format($amount, 'USD').' was withdrawn from your virtual card.' : 'Withdrawal from virtual card was successful.',
+                    'Card withdrawal submitted',
+                    $amount > 0
+                        ? 'Your $'.number_format($amount, 2).' card withdrawal request has been processed. Your Naira wallet will be credited once the provider confirms.'
+                        : 'Your card withdrawal request has been processed.',
                     ['action' => 'withdraw_from_card', 'amount' => $amount]
                 );
             } catch (\Throwable $e) {
                 Log::warning('Virtual card withdraw notification failed: '.$e->getMessage());
             }
 
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal successful.');
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal request submitted.');
         } catch (\Exception $e) {
             Log::error('Withdraw from card error: '.$e->getMessage(), [
                 'user_id' => $request->user()->id,
@@ -419,6 +418,29 @@ class VirtualCardController extends Controller
             ]);
 
             return ResponseHelper::serverError('An error occurred while withdrawing from card. Please try again.');
+        }
+    }
+
+    #[OA\Get(path: '/api/virtual-cards/{id}/withdraw-estimate', summary: 'Estimate 493 BIN Visa card withdrawal refund', security: [['sanctum' => []]], tags: ['Virtual Cards'])]
+    public function withdrawEstimate(Request $request, int $id): JsonResponse
+    {
+        try {
+            $amount = (float) $request->query('amount', 0);
+            $result = $this->virtualCardService->estimateCardWithdrawal($request->user()->id, $id, $amount);
+            if (! $result['success']) {
+                return ResponseHelper::error($result['message'] ?? 'Unable to estimate withdrawal', $result['status'] ?? 400);
+            }
+
+            return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal estimate retrieved successfully.')
+                ->header('Cache-Control', 'no-store, private, must-revalidate');
+        } catch (\Exception $e) {
+            Log::error('Withdraw estimate error: '.$e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'card_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return ResponseHelper::serverError('An error occurred while estimating card withdrawal.');
         }
     }
 
