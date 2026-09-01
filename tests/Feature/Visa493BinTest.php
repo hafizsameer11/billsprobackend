@@ -275,10 +275,12 @@ class Visa493BinTest extends TestCase
                 ]],
             ], 200),
             'https://pagocards.test/api/v1/cards/getallcards' => Http::response([
-                'data' => [[
-                    'card_id' => 'card_493_list',
-                    'name_on_card' => 'Mixed User',
-                    'balance' => ['display_amount' => 0],
+                'cards' => [[
+                    'cardid' => 'card_493_list',
+                    'useremail' => 'mixed-list@example.com',
+                    'lastfour' => '4225',
+                    'brand' => 'visa',
+                    'type' => 'virtual',
                 ]],
             ], 200),
         ]);
@@ -298,5 +300,45 @@ class Visa493BinTest extends TestCase
         $this->assertEquals('legacy', $legacy->metadata['pagocards_visa_api']);
         $this->assertEquals('v1_493', $bin493->metadata['pagocards_visa_api']);
         $this->assertEquals(2, VirtualCard::where('user_id', $user->id)->count());
+    }
+
+    public function test_get_user_cards_recovers_493_card_from_cards_list_key(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/visacard/getallcards' => Http::response(['data' => []], 200),
+            'https://pagocards.test/api/v1/cards/getallcards' => Http::response([
+                'cards' => [[
+                    'cardid' => 'card_01recovered493',
+                    'useremail' => 'recover@example.com',
+                    'lastfour' => '5430',
+                    'brand' => 'visa',
+                    'type' => 'virtual',
+                    'status' => 'active',
+                ]],
+            ], 200),
+            'https://pagocards.test/api/v1/cards/card_01recovered493' => Http::response([
+                'status' => 'success',
+                'data' => [
+                    'card_id' => 'card_01recovered493',
+                    'card_number' => '4937241043245430',
+                    'cvv' => '298',
+                    'expiry_month' => '08',
+                    'expiry_year' => '2031',
+                    'balance' => ['display_amount' => 0],
+                ],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create(['email' => 'recover@example.com']);
+
+        app(VirtualCardService::class)->getUserCards($user->id);
+
+        $card = VirtualCard::where('user_id', $user->id)
+            ->where('provider_card_id', 'card_01recovered493')
+            ->first();
+
+        $this->assertNotNull($card);
+        $this->assertEquals('v1_493', $card->metadata['pagocards_visa_api']);
+        $this->assertTrue($card->is_active);
     }
 }
