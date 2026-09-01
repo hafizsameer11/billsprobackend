@@ -169,7 +169,10 @@ class ReconciliationReportService
                 'card_funding' => $buckets['card_funding'],
                 'card_funding_display' => $this->ngn($buckets['card_funding']),
                 'card_funding_count' => $buckets['card_funding_count'],
-                'helper' => 'Withdrawals, bills, and money moved onto virtual cards',
+                'card_decline_fees' => $buckets['card_decline_fees'],
+                'card_decline_fees_display' => $this->ngn($buckets['card_decline_fees']),
+                'card_decline_fee_count' => $buckets['card_decline_fee_count'],
+                'helper' => 'Withdrawals, bills, card loads, creation fees, and decline fees',
             ],
             'still_held' => [
                 'naira_balance' => $nairaBalance,
@@ -242,6 +245,7 @@ class ReconciliationReportService
                 DB::raw('COALESCE(tx.bill_payments, 0) as bill_payments'),
                 DB::raw('COALESCE(tx.card_creation_fees, 0) as card_creation_fees'),
                 DB::raw('COALESCE(tx.card_funding, 0) as card_funding'),
+                DB::raw('COALESCE(tx.card_decline_fees, 0) as card_decline_fees'),
                 DB::raw('COALESCE(tx.fees, 0) as fees'),
                 DB::raw('COALESCE(vcs.card_spent_usd, 0) as card_spent_usd'),
                 DB::raw('COALESCE(nb.naira_balance, 0) as naira_balance'),
@@ -254,6 +258,7 @@ class ReconciliationReportService
                 DB::raw('COALESCE(txall.bill_payments, 0) as all_bill_payments'),
                 DB::raw('COALESCE(txall.card_creation_fees, 0) as all_card_creation_fees'),
                 DB::raw('COALESCE(txall.card_funding, 0) as all_card_funding'),
+                DB::raw('COALESCE(txall.card_decline_fees, 0) as all_card_decline_fees'),
             ]));
         $this->excludeTestAndStaffUsers($query);
         $query
@@ -284,6 +289,7 @@ class ReconciliationReportService
                 'bill_payments' => (float) $row->bill_payments,
                 'card_creation_fees' => (float) $row->card_creation_fees,
                 'card_funding' => (float) $row->card_funding,
+                'card_decline_fees' => (float) $row->card_decline_fees,
                 'fees' => (float) $row->fees,
             ];
             $nairaBalance = (float) $row->naira_balance;
@@ -294,6 +300,7 @@ class ReconciliationReportService
                 'bill_payments' => (float) $row->all_bill_payments,
                 'card_creation_fees' => (float) $row->all_card_creation_fees,
                 'card_funding' => (float) $row->all_card_funding,
+                'card_decline_fees' => (float) $row->all_card_decline_fees,
             ] : $buckets;
             $check = $this->buildCheck($allTimeBuckets, $nairaBalance, $buckets, $isRange);
 
@@ -314,6 +321,8 @@ class ReconciliationReportService
                 'card_funding_display' => $this->ngn($buckets['card_funding']),
                 'card_creation_fees' => $buckets['card_creation_fees'],
                 'card_creation_fees_display' => $this->ngn($buckets['card_creation_fees']),
+                'card_decline_fees' => $buckets['card_decline_fees'],
+                'card_decline_fees_display' => $this->ngn($buckets['card_decline_fees']),
                 'card_spent_usd' => (float) $row->card_spent_usd,
                 'card_spent_usd_display' => $this->usd((float) $row->card_spent_usd),
                 'naira_balance' => $nairaBalance,
@@ -392,6 +401,9 @@ class ReconciliationReportService
                 'card_funding' => $buckets['card_funding'],
                 'card_funding_display' => $this->ngn($buckets['card_funding']),
                 'card_funding_count' => $buckets['card_funding_count'],
+                'card_decline_fees' => $buckets['card_decline_fees'],
+                'card_decline_fees_display' => $this->ngn($buckets['card_decline_fees']),
+                'card_decline_fee_count' => $buckets['card_decline_fee_count'],
                 'helper' => 'Where Naira left this wallet',
             ],
             'still_held' => [
@@ -579,6 +591,7 @@ class ReconciliationReportService
             'bill_payment' => 'Bill payment',
             'card_creation' => 'Card creation fee',
             'card_funding' => 'Card load',
+            'card_decline_fee' => 'Card decline fee',
             'card_refund' => 'Card refund',
             'adjustment' => 'Manual adjustment',
             'payment' => 'Card payment',
@@ -629,8 +642,8 @@ class ReconciliationReportService
         $row = (clone $q)->selectRaw("
             COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) as deposited,
             COALESCE(SUM(CASE WHEN type = 'deposit' THEN 1 ELSE 0 END), 0) as deposited_count,
-            COALESCE(SUM(CASE WHEN type = 'card_refund' THEN amount ELSE 0 END), 0) as card_refunds,
-            COALESCE(SUM(CASE WHEN type = 'card_refund' THEN 1 ELSE 0 END), 0) as card_refunds_count,
+            COALESCE(SUM(CASE WHEN type IN ('card_refund', 'reversal') THEN amount ELSE 0 END), 0) as card_refunds,
+            COALESCE(SUM(CASE WHEN type IN ('card_refund', 'reversal') THEN 1 ELSE 0 END), 0) as card_refunds_count,
             COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN total_amount ELSE 0 END), 0) as withdrawn,
             COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN 1 ELSE 0 END), 0) as withdrawn_count,
             COALESCE(SUM(CASE WHEN type = 'bill_payment' THEN total_amount ELSE 0 END), 0) as bill_payments,
@@ -639,6 +652,8 @@ class ReconciliationReportService
             COALESCE(SUM(CASE WHEN type = 'card_creation' THEN 1 ELSE 0 END), 0) as card_creation_count,
             COALESCE(SUM(CASE WHEN type = 'card_funding' THEN total_amount ELSE 0 END), 0) as card_funding,
             COALESCE(SUM(CASE WHEN type = 'card_funding' THEN 1 ELSE 0 END), 0) as card_funding_count,
+            COALESCE(SUM(CASE WHEN type = 'card_decline_fee' THEN total_amount ELSE 0 END), 0) as card_decline_fees,
+            COALESCE(SUM(CASE WHEN type = 'card_decline_fee' THEN 1 ELSE 0 END), 0) as card_decline_fee_count,
             COALESCE(SUM(fee), 0) as fees
         ")->first();
 
@@ -655,6 +670,8 @@ class ReconciliationReportService
             'card_creation_count' => (int) ($row->card_creation_count ?? 0),
             'card_funding' => (float) ($row->card_funding ?? 0),
             'card_funding_count' => (int) ($row->card_funding_count ?? 0),
+            'card_decline_fees' => (float) ($row->card_decline_fees ?? 0),
+            'card_decline_fee_count' => (int) ($row->card_decline_fee_count ?? 0),
             'fees' => (float) ($row->fees ?? 0),
         ];
     }
@@ -664,11 +681,12 @@ class ReconciliationReportService
         return Transaction::query()
             ->selectRaw('user_id')
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) as deposited")
-            ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_refund' THEN amount ELSE 0 END), 0) as card_refunds")
+            ->selectRaw("COALESCE(SUM(CASE WHEN type IN ('card_refund', 'reversal') THEN amount ELSE 0 END), 0) as card_refunds")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN total_amount ELSE 0 END), 0) as withdrawn")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'bill_payment' THEN total_amount ELSE 0 END), 0) as bill_payments")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_creation' THEN total_amount ELSE 0 END), 0) as card_creation_fees")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_funding' THEN total_amount ELSE 0 END), 0) as card_funding")
+            ->selectRaw("COALESCE(SUM(CASE WHEN type = 'card_decline_fee' THEN total_amount ELSE 0 END), 0) as card_decline_fees")
             ->selectRaw('COALESCE(SUM(fee), 0) as fees')
             ->where('status', 'completed')
             ->where('currency', 'NGN')
@@ -796,7 +814,8 @@ class ReconciliationReportService
         return (float) $buckets['withdrawn']
             + (float) $buckets['bill_payments']
             + (float) $buckets['card_creation_fees']
-            + (float) $buckets['card_funding'];
+            + (float) $buckets['card_funding']
+            + (float) ($buckets['card_decline_fees'] ?? 0);
     }
 
     /**
@@ -820,7 +839,7 @@ class ReconciliationReportService
             'status' => $needsReview ? 'needs_review' : 'ok',
             'status_label' => $needsReview ? 'Gap '.$this->ngn($residual) : 'Balanced',
             'threshold_ngn' => self::REVIEW_THRESHOLD_NGN,
-            'explanation' => 'All-time check: every deposit and card refund, minus withdrawals, bills, card creation fees and card loads, should equal the current Naira balance.',
+            'explanation' => 'All-time check: every deposit and card refund, minus withdrawals, bills, card creation fees, card loads, and decline fees, should equal the current Naira balance.',
             'all_time' => true,
             'net_flow' => $netFlow,
             'net_flow_display' => $this->ngn($netFlow),
@@ -841,6 +860,7 @@ class ReconciliationReportService
             ['key' => 'bill_payments', 'label' => 'Bill payments', 'amount' => (float) $buckets['bill_payments']],
             ['key' => 'card_funding', 'label' => 'Loaded onto cards', 'amount' => (float) $buckets['card_funding']],
             ['key' => 'card_creation_fees', 'label' => 'Card creation fees', 'amount' => (float) $buckets['card_creation_fees']],
+            ['key' => 'card_decline_fees', 'label' => 'Card decline fees', 'amount' => (float) ($buckets['card_decline_fees'] ?? 0)],
         ];
 
         $total = max($moneyOut, 0.0001);
