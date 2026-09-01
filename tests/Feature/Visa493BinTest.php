@@ -129,7 +129,7 @@ class Visa493BinTest extends TestCase
             'card_name' => 'My Visa',
         ]);
 
-        $response->assertOk();
+        $response->assertSuccessful();
 
         $card = VirtualCard::where('user_id', $user->id)->first();
         $this->assertNotNull($card);
@@ -300,6 +300,66 @@ class Visa493BinTest extends TestCase
         $this->assertEquals('legacy', $legacy->metadata['pagocards_visa_api']);
         $this->assertEquals('v1_493', $bin493->metadata['pagocards_visa_api']);
         $this->assertEquals(2, VirtualCard::where('user_id', $user->id)->count());
+    }
+
+    public function test_create_visa_card_strips_unexpected_initial_load(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards' => Http::response([
+                'status' => 'success',
+                'data' => ['card_id' => 'card_01strip493'],
+            ], 200),
+            'https://pagocards.test/api/v1/cards/card_01strip493' => Http::sequence()
+                ->push([
+                    'status' => 'success',
+                    'data' => [
+                        'card_id' => 'card_01strip493',
+                        'card_number' => '4111111111111111',
+                        'cvv' => '123',
+                        'expiry_month' => '12',
+                        'expiry_year' => '2030',
+                        'balance' => ['display_amount' => 5],
+                    ],
+                ], 200)
+                ->push([
+                    'status' => 'success',
+                    'data' => [
+                        'card_id' => 'card_01strip493',
+                        'balance' => ['display_amount' => 0],
+                    ],
+                ], 200),
+            'https://pagocards.test/api/v1/cards/card_01strip493/withdraw' => Http::response([
+                'status' => 'success',
+                'data' => ['display_amount' => 5],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create([
+            'email' => 'strip@example.com',
+            'first_name' => 'Strip',
+            'last_name' => 'Test',
+        ]);
+        $this->seedNairaWallet($user);
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/virtual-cards/visa-card', [
+            'payment_wallet_type' => 'naira_wallet',
+            'payment_wallet_currency' => 'NGN',
+            'card_name' => 'Strip Card',
+        ]);
+
+        $response->assertSuccessful();
+        $response->assertJsonPath('success', true);
+
+        $card = VirtualCard::where('user_id', $user->id)->first();
+        $this->assertNotNull($card);
+        $this->assertEquals(0.0, (float) $card->balance);
+        $this->assertEquals(5.0, (float) ($card->metadata['stripped_unexpected_initial_load_usd'] ?? 0));
+
+        Http::assertSent(function ($request) {
+            return $request->url() === 'https://pagocards.test/api/v1/cards/card_01strip493/withdraw'
+                && (float) ($request['amount'] ?? 0) === 5.0;
+        });
     }
 
     public function test_get_user_cards_recovers_493_card_from_cards_list_key(): void

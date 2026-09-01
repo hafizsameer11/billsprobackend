@@ -8,7 +8,7 @@ return new class extends Migration
     public function up(): void
     {
         $usdToNgn = (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
-        $visaCreationUsd = 6.0;
+        $visaCreationUsd = 3.0;
         $visaFundFlatUsd = 1.0;
         $visaFundPct = 1.0;
 

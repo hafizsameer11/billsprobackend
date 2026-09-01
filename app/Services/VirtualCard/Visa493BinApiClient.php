@@ -81,6 +81,20 @@ class Visa493BinApiClient
     }
 
     /**
+     * @param  array{card_id: string, amount: float|int|string}  $payload
+     * @return array<string, mixed>
+     *
+     * @throws MastercardApiException
+     */
+    public function withdrawCard(array $payload): array
+    {
+        return $this->requestPost('withdraw', [
+            'card_id' => (string) $payload['card_id'],
+            'amount' => $payload['amount'],
+        ]);
+    }
+
+    /**
      * @return array<string, mixed>
      *
      * @throws MastercardApiException

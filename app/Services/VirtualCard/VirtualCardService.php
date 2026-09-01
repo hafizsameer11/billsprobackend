@@ -498,6 +498,13 @@ class VirtualCardService
             }
         }
 
+        $strippedUnexpectedLoadUsd = 0.0;
+        if ($use493Api && $resolvedProviderCardId) {
+            $stripResult = $this->stripUnexpected493InitialLoadIfNeeded($response, $resolvedProviderCardId);
+            $response = $stripResult['response'];
+            $strippedUnexpectedLoadUsd = $stripResult['stripped_usd'];
+        }
+
         if (! $resolvedProviderCardId) {
             ApplicationLog::warning('virtual_card', 'virtual_card.create_visa.provider_card_id_unresolved', [
                 'user_id' => $userId,
@@ -513,7 +520,7 @@ class VirtualCardService
         }
 
         try {
-            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd, $data, $accountEmail, $use493Api) {
+            return DB::transaction(function () use ($userId, $response, $resolvedProviderCardId, $paymentWalletType, $fiatCurrency, $feeNgn, $feeUsd, $data, $accountEmail, $use493Api, $strippedUnexpectedLoadUsd) {
                 $providerCardId = $resolvedProviderCardId;
                 $cardSnapshot = $this->extractCardSnapshot($response, $providerCardId);
                 $displayName = (string) ($data['card_name'] ?? $cardSnapshot['card_name']);
@@ -542,6 +549,7 @@ class VirtualCardService
                             'pagocards_visa_api' => $use493Api ? self::PAGOCARDS_VISA_API_493 : self::PAGOCARDS_VISA_API_LEGACY,
                             'product_code' => $use493Api ? $this->visa493BinApiClient->productCode() : null,
                             'brand' => $use493Api ? '493BIN' : null,
+                            'stripped_unexpected_initial_load_usd' => $strippedUnexpectedLoadUsd > 0 ? $strippedUnexpectedLoadUsd : null,
                             'provider_account_email' => (string) $accountEmail,
                             'payment_wallet_type' => $paymentWalletType,
                             'creation_fee_ngn' => $feeNgn,
@@ -858,6 +866,66 @@ class VirtualCardService
             'email' => $this->resolveProviderAccountEmail($user, $card),
             'cardid' => $card->provider_card_id,
         ]);
+    }
+
+    /**
+     * Pagocards may auto-credit some 493 BIN products on create even when we omit initial_load.
+     * Withdraw that balance so new cards start at $0.
+     *
+     * @param  array<string, mixed>  $response
+     * @return array{response: array<string, mixed>, stripped_usd: float}
+     */
+    protected function stripUnexpected493InitialLoadIfNeeded(array $response, string $providerCardId): array
+    {
+        if (! (bool) config('mastercard.visa_493.strip_unexpected_initial_load', true)) {
+            return ['response' => $response, 'stripped_usd' => 0.0];
+        }
+
+        $balanceUsd = $this->extractBalance($response);
+        if ($balanceUsd <= 0.0001) {
+            return ['response' => $response, 'stripped_usd' => 0.0];
+        }
+
+        try {
+            $this->visa493BinApiClient->withdrawCard([
+                'card_id' => $providerCardId,
+                'amount' => $balanceUsd,
+            ]);
+            $response = $this->visa493BinApiClient->getCardDetails($providerCardId);
+            ApplicationLog::info('virtual_card', 'virtual_card.create_visa.stripped_unexpected_initial_load', [
+                'provider_card_id' => $providerCardId,
+                'stripped_usd' => $balanceUsd,
+            ]);
+
+            return ['response' => $response, 'stripped_usd' => $balanceUsd];
+        } catch (MastercardApiException $exception) {
+            ApplicationLog::warning('virtual_card', 'virtual_card.create_visa.strip_initial_load_failed', [
+                'provider_card_id' => $providerCardId,
+                'balance_usd' => $balanceUsd,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return ['response' => $response, 'stripped_usd' => 0.0];
+        }
+    }
+
+    protected function shouldSkipProviderTransactionSync(VirtualCard $card, array $normalized): bool
+    {
+        if (! $this->isVisa493BinCard($card)) {
+            return false;
+        }
+
+        $stripped = (float) ($this->cardMetadataArray($card)['stripped_unexpected_initial_load_usd'] ?? 0);
+        if ($stripped <= 0) {
+            return false;
+        }
+
+        $type = strtolower((string) ($normalized['type'] ?? ''));
+        if (! in_array($type, ['topup', 'fund', 'funding', 'provider'], true)) {
+            return false;
+        }
+
+        return abs((float) ($normalized['amount'] ?? 0) - $stripped) < 0.02;
     }
 
     protected function fundPlatformServiceKeyForCard(VirtualCard $card): string
@@ -1963,6 +2031,40 @@ class VirtualCardService
 
     public function check3ds(int $userId, int $cardId): array
     {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
+        if (! $card) {
+            return [
+                'success' => false,
+                'message' => 'Virtual card not found.',
+                'status' => 404,
+            ];
+        }
+
+        if ($this->isVisa493BinCard($card)) {
+            $hasPending = VirtualCardProviderWebhookEvent::query()
+                ->where('user_id', $userId)
+                ->where('virtual_card_id', $cardId)
+                ->where('event_name', PagocardsVirtualCardWebhookService::EVENT_3DS_CREATED)
+                ->where('status', VirtualCardProviderWebhookEvent::STATUS_PENDING)
+                ->exists();
+
+            return [
+                'success' => true,
+                'message' => $hasPending
+                    ? 'A verification code is waiting in the app. Enter it in Apple Pay or Google Pay.'
+                    : 'No pending 3DS verification for this card.',
+                'data' => ['has_pending' => $hasPending],
+            ];
+        }
+
+        if ($this->isVisaCard($card)) {
+            return [
+                'success' => false,
+                'message' => '3DS polling is not available for this Visa card program.',
+                'status' => 422,
+            ];
+        }
+
         return $this->invokeProviderCardAction(
             $userId,
             $cardId,
@@ -1978,6 +2080,33 @@ class VirtualCardService
 
     public function approve3ds(int $userId, int $cardId, string $eventId): array
     {
+        $card = VirtualCard::where('id', $cardId)->where('user_id', $userId)->first();
+        if (! $card) {
+            return [
+                'success' => false,
+                'message' => 'Virtual card not found.',
+                'status' => 404,
+            ];
+        }
+
+        if ($this->isVisa493BinCard($card)) {
+            $this->markPagocardsWebhook3dsEventCompleted($userId, $cardId, $eventId);
+
+            return [
+                'success' => true,
+                'message' => 'Verification acknowledged. Complete the step in Apple Pay or Google Pay if prompted.',
+                'data' => ['acknowledged' => true],
+            ];
+        }
+
+        if ($this->isVisaCard($card)) {
+            return [
+                'success' => false,
+                'message' => 'This action is not available for this Visa card program.',
+                'status' => 422,
+            ];
+        }
+
         return $this->invokeProviderCardAction(
             $userId,
             $cardId,
@@ -2766,6 +2895,7 @@ class VirtualCardService
 
     protected function syncProviderTransactions(int $userId, int $cardId, array $providerResponse): void
     {
+        $card = VirtualCard::find($cardId);
         $providerTransactions = $this->extractProviderTransactionsFromResponse($providerResponse);
         foreach ($providerTransactions as $providerTransaction) {
             if (! is_array($providerTransaction)) {
@@ -2773,6 +2903,9 @@ class VirtualCardService
             }
 
             $normalized = $this->normalizeProviderTransaction($providerTransaction);
+            if ($card && $this->shouldSkipProviderTransactionSync($card, $normalized)) {
+                continue;
+            }
             VirtualCardTransaction::updateOrCreate(
                 [
                     'virtual_card_id' => $cardId,

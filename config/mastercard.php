@@ -67,11 +67,14 @@ return [
     'visa_493' => [
         'enabled' => filter_var(env('VISA_493_API_ENABLED', 'true'), FILTER_VALIDATE_BOOLEAN),
         'product_code' => env('VISA_493_PRODUCT_CODE', 'us_493_visa_bin'),
+        /** When true, withdraw Pagocards auto-initial-load so new cards start at $0. */
+        'strip_unexpected_initial_load' => filter_var(env('VISA_493_STRIP_UNEXPECTED_INITIAL_LOAD', 'true'), FILTER_VALIDATE_BOOLEAN),
         'endpoints' => [
             'create' => env('VISA_493_CREATE_PATH') ?: '/v1/cards',
             'get' => env('VISA_493_GET_PATH') ?: '/v1/cards/{card_id}',
             'get_all' => env('VISA_493_GET_ALL_PATH') ?: '/v1/cards/getallcards',
             'fund' => env('VISA_493_FUND_PATH') ?: '/v1/cards/{card_id}/fund',
+            'withdraw' => env('VISA_493_WITHDRAW_PATH') ?: '/v1/cards/{card_id}/withdraw',
             'block' => env('VISA_493_BLOCK_PATH') ?: '/v1/cards/{card_id}/block',
             'unblock' => env('VISA_493_UNBLOCK_PATH') ?: '/v1/cards/{card_id}/unblock',
             'terminate' => env('VISA_493_TERMINATE_PATH') ?: '/v1/cards/{card_id}/terminate',

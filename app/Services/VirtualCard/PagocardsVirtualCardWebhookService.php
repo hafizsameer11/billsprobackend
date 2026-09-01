@@ -37,6 +37,21 @@ class PagocardsVirtualCardWebhookService
 
     public const EVENT_TOPUP_COMPLETED = 'virtualcard.topup.completed';
 
+    public const EVENT_AUTHORIZATION_FEE = 'virtualcard.authorization.fee';
+
+    public const EVENT_REFUND = 'virtualcard.transaction.refund';
+
+    public const EVENT_TRANSACTION_FEE = 'virtualcard.transaction.fee';
+
+    public const EVENT_CASH_WITHDRAWAL = 'virtualcard.transaction.cash_withdrawal';
+
+    public const EVENT_CARD_APPLICATION = 'virtualcard.transaction.card_application';
+
+    public const EVENT_CANCELLATION = 'virtualcard.transaction.cancellation';
+
+    /** 493 BIN 3DS payloads use `eventType` instead of `event` / `eventName`. */
+    public const EVENT_3DS_493 = '3ds';
+
     private const LEGACY_AUTHORIZATION_CONFIRMED = 'cardAuthorization.confirmed';
 
     private const LEGACY_AUTHORIZATION_REJECTED = 'cardAuthorization.rejected';
@@ -51,6 +66,12 @@ class PagocardsVirtualCardWebhookService
         self::EVENT_DECLINED_CHARGE,
         self::EVENT_CROSS_BORDER,
         self::EVENT_TOPUP_COMPLETED,
+        self::EVENT_AUTHORIZATION_FEE,
+        self::EVENT_REFUND,
+        self::EVENT_TRANSACTION_FEE,
+        self::EVENT_CASH_WITHDRAWAL,
+        self::EVENT_CARD_APPLICATION,
+        self::EVENT_CANCELLATION,
         self::LEGACY_AUTHORIZATION_CONFIRMED,
         self::LEGACY_AUTHORIZATION_REJECTED,
     ];
@@ -73,8 +94,8 @@ class PagocardsVirtualCardWebhookService
 
         try {
             $payload = $request->all();
-            $eventData = $this->eventData($payload);
-            $externalEventId = trim((string) ($payload['event_id'] ?? $payload['eventId'] ?? ''));
+            $parsed = $this->parseIncomingWebhook($payload);
+            $externalEventId = $parsed['event_id'];
             if ($externalEventId === '') {
                 $this->markRaw($rawId, 'Missing event_id/eventId');
 
@@ -87,14 +108,16 @@ class PagocardsVirtualCardWebhookService
                 return ['success' => true, 'message' => 'Duplicate event ignored', 'duplicate' => true];
             }
 
-            $eventName = trim((string) ($payload['event'] ?? $payload['eventName'] ?? ''));
+            $eventName = $parsed['event_name'];
             if ($eventName === '' || ! in_array($eventName, self::SUPPORTED_EVENTS, true)) {
                 $this->markRaw($rawId, 'Unknown event/eventName: '.$eventName);
 
                 return ['success' => true, 'message' => 'Ignored: unknown event'];
             }
 
-            $pagocardsCardId = trim((string) ($eventData['cardId'] ?? $eventData['card_id'] ?? ''));
+            $eventData = $parsed['event_data'];
+            $payload = $parsed['stored_payload'];
+            $pagocardsCardId = $parsed['card_id'];
             if ($pagocardsCardId === '') {
                 $this->markRaw($rawId, 'Missing cardId');
 
@@ -180,6 +203,7 @@ class PagocardsVirtualCardWebhookService
 
     /**
      * New Pagocards events wrap their fields in `data`; legacy events are flat.
+     * 493 BIN 3DS uses `eventType` + top-level `cardid` (see Pagocards v1 cards webhooks).
      *
      * @return array<string, mixed>
      */
@@ -188,6 +212,69 @@ class PagocardsVirtualCardWebhookService
         return isset($payload['data']) && is_array($payload['data'])
             ? $payload['data']
             : $payload;
+    }
+
+    /**
+     * Normalize Mastercard legacy, virtualcard.*, and 493 BIN 3DS webhook shapes.
+     *
+     * @return array{
+     *     event_name: string,
+     *     event_id: string,
+     *     card_id: string,
+     *     event_data: array<string, mixed>,
+     *     stored_payload: array<string, mixed>
+     * }
+     */
+    private function parseIncomingWebhook(array $payload): array
+    {
+        $eventType = strtolower(trim((string) ($payload['eventType'] ?? '')));
+        if ($eventType === self::EVENT_3DS_493) {
+            $cardId = trim((string) ($payload['cardid'] ?? $payload['cardId'] ?? ''));
+            $authId = trim((string) ($payload['authId'] ?? ''));
+            $otp = trim((string) ($payload['otp'] ?? ''));
+            $merchant = trim((string) ($payload['merchantName'] ?? 'Merchant'));
+            $amount = trim((string) ($payload['transactionAmount'] ?? ''));
+            $currency = trim((string) ($payload['transactionCurrency'] ?? 'USD'));
+
+            $normalized = array_merge($payload, [
+                'eventName' => self::EVENT_3DS_CREATED,
+                'eventId' => $payload['eventId'] ?? '',
+                'cardId' => $cardId,
+                'eventTargetId' => $authId,
+                'merchantName' => $merchant,
+                'merchantAmount' => $amount,
+                'merchantCurrency' => $currency,
+                'otp' => $otp,
+                'verificationType' => $payload['verificationType'] ?? null,
+                'pagocards_visa_api' => 'v1_493',
+            ]);
+
+            return [
+                'event_name' => self::EVENT_3DS_CREATED,
+                'event_id' => trim((string) ($payload['eventId'] ?? '')),
+                'card_id' => $cardId,
+                'event_data' => $normalized,
+                'stored_payload' => $normalized,
+            ];
+        }
+
+        $eventData = $this->eventData($payload);
+        $eventName = trim((string) ($payload['event'] ?? $payload['eventName'] ?? ''));
+        $cardId = trim((string) (
+            $payload['cardid']
+            ?? $payload['cardId']
+            ?? $eventData['cardId']
+            ?? $eventData['card_id']
+            ?? ''
+        ));
+
+        return [
+            'event_name' => $eventName,
+            'event_id' => trim((string) ($payload['event_id'] ?? $payload['eventId'] ?? '')),
+            'card_id' => $cardId,
+            'event_data' => $eventData,
+            'stored_payload' => $payload,
+        ];
     }
 
     protected function notifyUser(
@@ -199,12 +286,15 @@ class PagocardsVirtualCardWebhookService
     ): void {
         if ($eventName === self::EVENT_3DS_CREATED) {
             $merchant = (string) ($data['merchantName'] ?? 'Merchant');
-            $amount = (string) ($data['merchantAmount'] ?? '');
-            $currency = (string) ($data['merchantCurrency'] ?? '');
-            $title = 'Card security approval needed';
-            $message = $amount !== '' && $currency !== ''
-                ? "Approve payment to {$merchant} for {$amount} {$currency}."
-                : "Approve a payment to {$merchant}.";
+            $amount = (string) ($data['merchantAmount'] ?? $data['transactionAmount'] ?? '');
+            $currency = (string) ($data['merchantCurrency'] ?? $data['transactionCurrency'] ?? '');
+            $otp = trim((string) ($data['otp'] ?? ''));
+            $title = $otp !== '' ? 'Card verification code' : 'Card security approval needed';
+            $message = $otp !== ''
+                ? "Use code {$otp} to verify your payment to {$merchant} in Apple Pay or Google Pay."
+                : ($amount !== '' && $currency !== ''
+                    ? "Approve payment to {$merchant} for {$amount} {$currency}."
+                    : "Approve a payment to {$merchant}.");
 
             NotificationHelper::create(
                 $user->id,
@@ -215,11 +305,13 @@ class PagocardsVirtualCardWebhookService
                     'kind' => 'pagocards_3ds',
                     'virtual_card_id' => $virtualCardId,
                     'provider_event_id' => $externalEventId,
-                    'event_target_id' => $data['eventTargetId'] ?? null,
+                    'event_target_id' => $data['eventTargetId'] ?? $data['authId'] ?? null,
                     'merchant_name' => $data['merchantName'] ?? null,
-                    'merchant_amount' => $data['merchantAmount'] ?? null,
-                    'merchant_currency' => $data['merchantCurrency'] ?? null,
+                    'merchant_amount' => $data['merchantAmount'] ?? $data['transactionAmount'] ?? null,
+                    'merchant_currency' => $data['merchantCurrency'] ?? $data['transactionCurrency'] ?? null,
                     'masked_pan' => $data['maskedPan'] ?? null,
+                    'otp' => $otp !== '' ? $otp : null,
+                    'verification_type' => $data['verificationType'] ?? null,
                 ]
             );
 
@@ -291,6 +383,36 @@ class PagocardsVirtualCardWebhookService
                 "{$amountDisplay} was added to your virtual card.",
                 'pagocards_topup_completed',
             ],
+            self::EVENT_AUTHORIZATION_FEE => [
+                'Authorization fee charged',
+                "{$amountDisplay} authorization fee was charged for your payment to {$merchant}.",
+                'pagocards_authorization_fee',
+            ],
+            self::EVENT_REFUND => [
+                'Card refund received',
+                "{$amountDisplay} was refunded to your card from {$merchant}.",
+                'pagocards_refund',
+            ],
+            self::EVENT_TRANSACTION_FEE => [
+                'Card transaction fee charged',
+                "{$amountDisplay} transaction fee was charged for your payment to {$merchant}.",
+                'pagocards_transaction_fee',
+            ],
+            self::EVENT_CASH_WITHDRAWAL => [
+                'ATM withdrawal completed',
+                "{$amountDisplay} was withdrawn from your card at {$merchant}.",
+                'pagocards_cash_withdrawal',
+            ],
+            self::EVENT_CARD_APPLICATION => [
+                'Card application processed',
+                'Your virtual card application was processed by the provider.',
+                'pagocards_card_application',
+            ],
+            self::EVENT_CANCELLATION => [
+                'Card transaction cancelled',
+                "A {$amountDisplay} transaction at {$merchant} was cancelled.",
+                'pagocards_cancellation',
+            ],
             default => ['', '', ''],
         };
 
@@ -333,6 +455,11 @@ class PagocardsVirtualCardWebhookService
             self::EVENT_DECLINED_CHARGE => ['fee', 'completed', 'Declined transaction fee'],
             self::EVENT_CROSS_BORDER => ['fee', 'completed', 'Cross-border card fee'],
             self::EVENT_TOPUP_COMPLETED => ['fund', 'completed', 'Virtual card top-up'],
+            self::EVENT_AUTHORIZATION_FEE => ['fee', 'completed', 'Authorization fee'],
+            self::EVENT_REFUND => ['refund', 'completed', 'Card refund'],
+            self::EVENT_TRANSACTION_FEE => ['fee', 'completed', 'Card transaction fee'],
+            self::EVENT_CASH_WITHDRAWAL => ['payment', 'completed', 'ATM cash withdrawal'],
+            self::EVENT_CANCELLATION => ['payment', 'failed', 'Cancelled card transaction'],
             default => null,
         };
 
@@ -340,21 +467,30 @@ class PagocardsVirtualCardWebhookService
             return;
         }
 
+        if ($eventName === self::EVENT_TOPUP_COMPLETED) {
+            $meta = is_array($card->metadata) ? $card->metadata : [];
+            $stripped = (float) ($meta['stripped_unexpected_initial_load_usd'] ?? 0);
+            $amount = $this->eventAmount($eventName, $data);
+            if ($stripped > 0 && abs($amount - $stripped) < 0.02) {
+                return;
+            }
+        }
+
         [$type, $status, $defaultDescription] = $definition;
         $providerId = trim((string) ($data['id'] ?? $data['eventTargetId'] ?? $data['reference'] ?? ''));
         if ($providerId === '') {
             $providerId = 'webhook_'.hash('sha256', json_encode($payload) ?: uniqid('', true));
         }
-        if (in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER], true)) {
+        if (in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER, self::EVENT_AUTHORIZATION_FEE, self::EVENT_TRANSACTION_FEE], true)) {
             $providerId .= ':'.$type.':'.$this->eventSlug($eventName);
         }
 
         $reference = trim((string) ($data['reference'] ?? $providerId));
-        if (in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER], true)) {
+        if (in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER, self::EVENT_AUTHORIZATION_FEE, self::EVENT_TRANSACTION_FEE], true)) {
             $reference .= ':'.$this->eventSlug($eventName);
         }
         $amount = $this->eventAmount($eventName, $data);
-        $fee = in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER], true)
+        $fee = in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_CROSS_BORDER, self::EVENT_AUTHORIZATION_FEE, self::EVENT_TRANSACTION_FEE], true)
             ? $amount
             : 0.0;
         $transactionAmount = $fee > 0 ? 0.0 : $amount;
@@ -422,8 +558,8 @@ class PagocardsVirtualCardWebhookService
             return (float) $data['display_amount'];
         }
 
-        $raw = in_array($eventName, [self::EVENT_DECLINED_CHARGE], true)
-            ? ($data['feeAmount'] ?? 0)
+        $raw = in_array($eventName, [self::EVENT_DECLINED_CHARGE, self::EVENT_AUTHORIZATION_FEE], true)
+            ? ($data['feeAmount'] ?? $data['amount'] ?? 0)
             : ($data['chargedAmount'] ?? $data['amount'] ?? $data['merchantAmount'] ?? 0);
 
         if (! is_numeric($raw)) {
@@ -450,6 +586,11 @@ class PagocardsVirtualCardWebhookService
             self::EVENT_DECLINED_CHARGE,
             self::EVENT_CROSS_BORDER,
             self::EVENT_TOPUP_COMPLETED,
+            self::EVENT_AUTHORIZATION_FEE,
+            self::EVENT_REFUND,
+            self::EVENT_TRANSACTION_FEE,
+            self::EVENT_CASH_WITHDRAWAL,
+            self::EVENT_CANCELLATION,
             self::LEGACY_AUTHORIZATION_CONFIRMED,
         ], true);
     }

@@ -348,4 +348,102 @@ class PagocardsVirtualCardWebhookTest extends TestCase
             ->where('title', 'Virtual card funded')
             ->count());
     }
+
+    public function test_topup_webhook_resolves_cardid_from_top_level_field(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $card = $this->makeVirtualCardForUser($user, '019f-card-topup-top');
+
+        $this->postJson($this->webhookUrl(), [
+            'event' => 'virtualcard.topup.completed',
+            'event_id' => 'evt-topup-cardid-top-1',
+            'cardid' => '019f-card-topup-top',
+            'data' => [
+                'id' => 'provider-topup-top-1',
+                'amount' => 5000000,
+                'reference' => 'funding-topup-top-1',
+                'status' => 'completed',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('virtual_card_transactions', [
+            'virtual_card_id' => $card->id,
+            'provider_transaction_id' => 'provider-topup-top-1',
+            'type' => 'fund',
+        ]);
+    }
+
+    public function test_493_bin_3ds_webhook_creates_pending_event_with_otp(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $card = $this->makeVirtualCardForUser($user, 'card_01m0evv599d37vm6dgb0rhd000');
+
+        $this->postJson($this->webhookUrl(), [
+            'eventId' => '977bdaf833a8423186d599cee720cf29',
+            'eventType' => '3ds',
+            'userBankcardId' => 1000001,
+            'verificationType' => 'http',
+            'otp' => '234562',
+            'authId' => 'b47621b3601a4052951f8c5a8fe430b6',
+            'transactionAmount' => '10',
+            'transactionCurrency' => 'USD',
+            'merchantName' => 'MYPAL',
+            'cardid' => 'card_01m0evv599d37vm6dgb0rhd000',
+        ])->assertOk();
+
+        $this->assertDatabaseHas('virtual_card_provider_webhook_events', [
+            'external_event_id' => '977bdaf833a8423186d599cee720cf29',
+            'virtual_card_id' => $card->id,
+            'user_id' => $user->id,
+            'event_name' => 'cardAuthentication.created',
+            'event_target_id' => 'b47621b3601a4052951f8c5a8fe430b6',
+            'status' => VirtualCardProviderWebhookEvent::STATUS_PENDING,
+        ]);
+
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $user->id,
+            'title' => 'Card verification code',
+        ]);
+
+        Queue::assertPushed(SendExpoPushToUserJob::class, function (SendExpoPushToUserJob $job): bool {
+            return $job->data['kind'] === 'pagocards_3ds'
+                && str_contains($job->body, '234562');
+        });
+    }
+
+    public function test_authorization_fee_webhook_creates_fee_transaction(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $card = $this->makeVirtualCardForUser($user, 'card_01authfee493');
+
+        $this->postJson($this->webhookUrl(), [
+            'event' => 'virtualcard.authorization.fee',
+            'event_id' => 'evt-auth-fee-1',
+            'cardid' => 'card_01authfee493',
+            'data' => [
+                'id' => 'FEE55363260821000000006168',
+                'cardId' => 'card_01authfee493',
+                'amount' => 300000,
+                'display_amount' => 0.3,
+                'currency' => 'USD',
+                'reference' => 'FEE55363260821000000006168',
+                'status' => 'completed',
+                'transaction_type' => 'authorization_fee',
+                'narrative' => 'Authorization fee',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('virtual_card_transactions', [
+            'virtual_card_id' => $card->id,
+            'provider_transaction_id' => 'FEE55363260821000000006168:fee:virtualcard-authorization-fee',
+            'type' => 'fee',
+            'fee' => 0.30,
+        ]);
+    }
 }
