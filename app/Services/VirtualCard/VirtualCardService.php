@@ -845,7 +845,7 @@ class VirtualCardService
      */
     protected function stripUnexpected493InitialLoadIfNeeded(array $response, string $providerCardId): array
     {
-        if (! (bool) config('mastercard.visa_493.strip_unexpected_initial_load', true)) {
+        if (! (bool) config('mastercard.visa_493.strip_unexpected_initial_load', false)) {
             return ['response' => $response, 'stripped_usd' => 0.0];
         }
 
