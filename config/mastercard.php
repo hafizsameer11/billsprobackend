@@ -59,4 +59,23 @@ return [
         'visa_unblock' => env('MASTERCARD_API_VISA_UNBLOCK_PATH') ?: '/visacard/unblockcard',
         'visa_terminate' => env('MASTERCARD_API_VISA_TERMINATE_PATH') ?: '/terminate',
     ],
+
+    /**
+     * Pagocards 4XXBINs API (493 BIN) — new Visa virtual cards.
+     * @see https://pagocards.com/documentation#v1-cards-create
+     */
+    'visa_493' => [
+        'enabled' => filter_var(env('VISA_493_API_ENABLED', 'true'), FILTER_VALIDATE_BOOLEAN),
+        'product_code' => env('VISA_493_PRODUCT_CODE', 'us_493_visa_bin'),
+        'endpoints' => [
+            'create' => env('VISA_493_CREATE_PATH') ?: '/v1/cards',
+            'get' => env('VISA_493_GET_PATH') ?: '/v1/cards/{card_id}',
+            'get_all' => env('VISA_493_GET_ALL_PATH') ?: '/v1/cards/getallcards',
+            'fund' => env('VISA_493_FUND_PATH') ?: '/v1/cards/{card_id}/fund',
+            'block' => env('VISA_493_BLOCK_PATH') ?: '/v1/cards/{card_id}/block',
+            'unblock' => env('VISA_493_UNBLOCK_PATH') ?: '/v1/cards/{card_id}/unblock',
+            'terminate' => env('VISA_493_TERMINATE_PATH') ?: '/v1/cards/{card_id}/terminate',
+            'transactions' => env('VISA_493_TRANSACTIONS_PATH') ?: '/v1/cards/{card_id}/transactions',
+        ],
+    ],
 ];
