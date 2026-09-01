@@ -479,17 +479,6 @@ class VirtualCardService
                 );
         }
 
-        if (! $resolvedProviderCardId && $use493Api) {
-            $recovered = $this->recoverVisaCardFromProviderList($userId, $accountEmail, $firstname, $lastname, true);
-            if ($recovered) {
-                return [
-                    'success' => true,
-                    'message' => 'Virtual Visa card created successfully',
-                    'data' => ['card' => $recovered],
-                ];
-            }
-        }
-
         if ($use493Api && $resolvedProviderCardId) {
             try {
                 $response = $this->visa493BinApiClient->getCardDetails($resolvedProviderCardId);
@@ -614,38 +603,17 @@ class VirtualCardService
                     ],
                 ];
             });
-        } catch (\Throwable $e) {
+        } catch (\RuntimeException $e) {
             ApplicationLog::warning('virtual_card', 'virtual_card.create_visa.fee_or_persist_failed', [
                 'user_id' => $userId,
                 'provider_card_id' => $resolvedProviderCardId ?? null,
                 'message' => $e->getMessage(),
             ]);
 
-            if (! empty($resolvedProviderCardId)) {
-                try {
-                    $recovered = $this->recoverVisaCardFromProviderList(
-                        $userId,
-                        (string) $accountEmail,
-                        $firstname,
-                        $lastname,
-                        $use493Api
-                    );
-                    if ($recovered) {
-                        return [
-                            'success' => true,
-                            'message' => 'Virtual Visa card created successfully',
-                            'data' => ['card' => $recovered],
-                        ];
-                    }
-                } catch (\Throwable) {
-                    // fall through to error response
-                }
-            }
-
             return [
                 'success' => false,
-                'message' => 'Card was created at the provider but could not be saved. Open your card list again to sync, or contact support.',
-                'status' => 500,
+                'message' => $e->getMessage(),
+                'status' => 400,
             ];
         }
     }
@@ -1451,17 +1419,6 @@ class VirtualCardService
             }
         } catch (MastercardApiException) {
             // ignore — use DB cache
-        }
-
-        if ($this->visa493BinApiClient->isEnabled()) {
-            try {
-                $visa493Response = $this->visa493BinApiClient->getAllCards(['email' => $user->email]);
-                foreach ($this->extractCardsFromListResponse($visa493Response) as $providerCard) {
-                    $this->upsertVisaCardFromProviderSync($userId, $providerCard, self::PAGOCARDS_VISA_API_493);
-                }
-            } catch (MastercardApiException) {
-                // ignore — use DB cache
-            }
         }
 
         return VirtualCard::where('user_id', $userId)
@@ -2459,78 +2416,6 @@ class VirtualCardService
         $cards = $this->extractCardsFromListResponse($listResponse);
 
         return $this->resolveProviderCardIdFromCardsArray($cards, $firstName, $lastName);
-    }
-
-    /**
-     * Recover a Visa row from Pagocards list when create response omitted card_id or DB persist failed.
-     */
-    protected function recoverVisaCardFromProviderList(
-        int $userId,
-        string $userEmail,
-        string $firstName,
-        string $lastName,
-        bool $use493Api
-    ): ?VirtualCard {
-        $providerCardId = $use493Api
-            ? $this->resolveProviderCardIdFromVisa493List($userEmail, $firstName, $lastName)
-            : $this->resolveProviderCardIdFromVisaList($userEmail, $firstName, $lastName);
-
-        if (! $providerCardId) {
-            return null;
-        }
-
-        $apiVersion = $use493Api ? self::PAGOCARDS_VISA_API_493 : self::PAGOCARDS_VISA_API_LEGACY;
-
-        try {
-            $listResponse = $use493Api
-                ? $this->visa493BinApiClient->getAllCards(['email' => $userEmail])
-                : $this->visaCardApiClient->getAllCards(['email' => $userEmail]);
-            foreach ($this->extractCardsFromListResponse($listResponse) as $providerCard) {
-                $rowId = (string) ($providerCard['cardid'] ?? $providerCard['card_id'] ?? $providerCard['id'] ?? '');
-                if ($rowId === $providerCardId) {
-                    $this->upsertVisaCardFromProviderSync($userId, $providerCard, $apiVersion);
-                    break;
-                }
-            }
-        } catch (MastercardApiException) {
-            return null;
-        }
-
-        $card = VirtualCard::where('provider_card_id', $providerCardId)
-            ->where('user_id', $userId)
-            ->first();
-
-        if (! $card) {
-            return null;
-        }
-
-        try {
-            $user = User::findOrFail($userId);
-            $details = $this->fetchVisaCardDetails($card, $user);
-            $snapshot = $this->extractCardSnapshot($details, $providerCardId);
-            $card->update([
-                'card_number' => $snapshot['card_number'],
-                'cvv' => $snapshot['cvv'],
-                'expiry_month' => $snapshot['expiry_month'],
-                'expiry_year' => $snapshot['expiry_year'],
-                'balance' => $this->extractBalance($details, (float) $card->balance),
-                'provider_payload' => $details,
-                'metadata' => array_merge($this->cardMetadataArray($card), array_filter([
-                    'pagocards_visa_api' => $apiVersion,
-                    'product_code' => $use493Api ? $this->visa493BinApiClient->productCode() : null,
-                    'brand' => $use493Api ? '493BIN' : null,
-                    'card_scheme' => 'visa',
-                ], static fn ($v) => $v !== null && $v !== '')),
-                'is_active' => $this->resolveIsActiveForProviderSync(
-                    ['status' => $this->extractStatus($details, (string) $card->provider_status)],
-                    $card
-                ),
-            ]);
-        } catch (MastercardApiException) {
-            // list upsert is enough for visibility
-        }
-
-        return $card->fresh();
     }
 
     /**
