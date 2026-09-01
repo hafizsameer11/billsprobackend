@@ -235,7 +235,7 @@ class Visa493BinApiClient
         }
 
         $status = strtolower((string) ($data['status'] ?? ''));
-        $failed = ! $response->ok() || ($status !== '' && $status === 'failure');
+        $failed = ! $response->successful() || ($status !== '' && $status === 'failure');
 
         if ($failed) {
             $message = $this->normalizeMessage($data['message'] ?? null);

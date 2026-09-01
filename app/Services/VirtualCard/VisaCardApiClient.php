@@ -126,7 +126,7 @@ class VisaCardApiClient
             $data = [];
         }
 
-        if (! $response->ok()) {
+        if (! $response->successful()) {
             $message = $this->normalizeMessage($data['message'] ?? null);
             $logContext = [
                 'endpoint_key' => $endpointKey,

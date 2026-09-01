@@ -6,6 +6,7 @@ use App\Models\FiatWallet;
 use App\Models\PlatformRate;
 use App\Models\User;
 use App\Models\VirtualCard;
+use App\Services\VirtualCard\Visa493BinApiClient;
 use App\Services\VirtualCard\VirtualCardService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -35,7 +36,7 @@ class Visa493BinTest extends TestCase
     {
         foreach (
             [
-                ['service_key' => 'visa_creation', 'fee_usd' => 3.0, 'exchange_rate_ngn_per_usd' => 1500.0],
+                ['service_key' => 'visa_creation', 'fee_usd' => 8.0, 'exchange_rate_ngn_per_usd' => 1500.0],
                 ['service_key' => 'visa_fund', 'fee_usd' => 1.0, 'exchange_rate_ngn_per_usd' => 1500.0],
             ] as $row
         ) {
@@ -91,16 +92,52 @@ class Visa493BinTest extends TestCase
         ]);
     }
 
+    public function test_http_fake_201_is_successful_not_ok(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards' => Http::response([
+                'status' => 'success',
+                'message' => 'Card created successfully.',
+            ], 201),
+        ]);
+
+        $response = Http::post('https://pagocards.test/api/v1/cards', []);
+
+        $this->assertSame(201, $response->status());
+        $this->assertFalse($response->ok());
+        $this->assertTrue($response->successful());
+    }
+
+    public function test_visa493_client_accepts_http_201_on_create(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards' => Http::response([
+                'status' => 'success',
+                'message' => 'Card created successfully.',
+                'data' => ['card_id' => 'card_201test'],
+            ], 201),
+        ]);
+
+        $result = app(Visa493BinApiClient::class)->createCard([
+            'first_name' => 'Jane',
+            'last_name' => 'Doe',
+            'email' => 'jane@example.com',
+        ]);
+
+        $this->assertSame('success', $result['status']);
+        $this->assertSame('Card created successfully.', $result['message']);
+    }
+
     public function test_create_visa_card_uses_493_api_without_initial_load(): void
     {
         Http::fake([
             'https://pagocards.test/api/v1/cards' => Http::response([
                 'status' => 'success',
-                'message' => 'Card created',
+                'message' => 'Card created successfully.',
                 'data' => [
                     'card_id' => 'card_01test493',
                 ],
-            ], 200),
+            ], 201),
             'https://pagocards.test/api/v1/cards/card_01test493' => Http::response([
                 'status' => 'success',
                 'data' => [
@@ -120,7 +157,7 @@ class Visa493BinTest extends TestCase
             'first_name' => 'Jane',
             'last_name' => 'Doe',
         ]);
-        $this->seedNairaWallet($user);
+        $this->seedNairaWallet($user, 50000);
         Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/virtual-cards/visa-card', [
@@ -129,7 +166,8 @@ class Visa493BinTest extends TestCase
             'card_name' => 'My Visa',
         ]);
 
-        $response->assertSuccessful();
+        $response->assertSuccessful()
+            ->assertJsonPath('success', true);
 
         $card = VirtualCard::where('user_id', $user->id)->first();
         $this->assertNotNull($card);
@@ -304,6 +342,8 @@ class Visa493BinTest extends TestCase
 
     public function test_create_visa_card_strips_unexpected_initial_load(): void
     {
+        config(['mastercard.visa_493.strip_unexpected_initial_load' => true]);
+
         Http::fake([
             'https://pagocards.test/api/v1/cards' => Http::response([
                 'status' => 'success',
@@ -339,7 +379,7 @@ class Visa493BinTest extends TestCase
             'first_name' => 'Strip',
             'last_name' => 'Test',
         ]);
-        $this->seedNairaWallet($user);
+        $this->seedNairaWallet($user, 50000);
         Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/virtual-cards/visa-card', [

@@ -111,7 +111,12 @@ class VisaVirtualCardController extends Controller
             $result = $this->visaVirtualCardService->createCard($userId, $request->validated());
 
             if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Card creation failed', $result['status'] ?? 400);
+                $status = (int) ($result['status'] ?? 400);
+                if ($status < 400 || $status > 599) {
+                    $status = 422;
+                }
+
+                return ResponseHelper::error($result['message'] ?? 'Card creation failed', $status);
             }
 
             try {
