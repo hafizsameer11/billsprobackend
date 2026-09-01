@@ -2392,6 +2392,9 @@ class VirtualCardService
             if (! is_array($card)) {
                 continue;
             }
+            if ($this->isTerminatedProviderCardStatus($card)) {
+                continue;
+            }
             $nameOnCard = (string) ($card['nameoncard'] ?? $card['name_on_card'] ?? $card['name'] ?? '');
             $candidateId = (string) ($card['cardid'] ?? $card['card_id'] ?? $card['id'] ?? '');
             if ($candidateId !== '' && $nameOnCard !== '' && strcasecmp($nameOnCard, $fullName) === 0) {
@@ -2401,6 +2404,9 @@ class VirtualCardService
 
         $cards = array_values(array_filter($cards, static fn ($card) => is_array($card)));
         for ($i = count($cards) - 1; $i >= 0; $i--) {
+            if ($this->isTerminatedProviderCardStatus($cards[$i])) {
+                continue;
+            }
             $candidateId = (string) ($cards[$i]['cardid'] ?? $cards[$i]['card_id'] ?? $cards[$i]['id'] ?? '');
             if ($candidateId !== '') {
                 return $candidateId;
@@ -2515,7 +2521,10 @@ class VirtualCardService
                     'brand' => $use493Api ? '493BIN' : null,
                     'card_scheme' => 'visa',
                 ], static fn ($v) => $v !== null && $v !== '')),
-                'is_active' => true,
+                'is_active' => $this->resolveIsActiveForProviderSync(
+                    ['status' => $this->extractStatus($details, (string) $card->provider_status)],
+                    $card
+                ),
             ]);
         } catch (MastercardApiException) {
             // list upsert is enough for visibility
@@ -2538,6 +2547,10 @@ class VirtualCardService
             ->where('user_id', $userId)
             ->first();
         if ($existingCard && ! $this->isVisaCard($existingCard)) {
+            return;
+        }
+
+        if (! $existingCard && $this->isTerminatedProviderCardStatus($providerCard)) {
             return;
         }
 
@@ -2564,7 +2577,7 @@ class VirtualCardService
                 'provider_status' => (string) ($providerCard['status'] ?? 'active'),
                 'currency' => 'USD',
                 'balance' => $this->extractBalance(['data' => $providerCard], (float) ($existingCard?->balance ?? 0)),
-                'is_active' => true,
+                'is_active' => $this->resolveIsActiveForProviderSync($providerCard, $existingCard),
                 'metadata' => $metadata,
                 'provider_payload' => $providerCard,
             ]
@@ -2691,6 +2704,41 @@ class VirtualCardService
     protected function extractStatus(array $response, ?string $fallback = 'active'): string
     {
         return (string) (data_get($response, 'data.status') ?? data_get($response, 'status') ?? $fallback ?? 'active');
+    }
+
+    /**
+     * @param  array<string, mixed>|string  $providerCardOrStatus
+     */
+    protected function isTerminatedProviderCardStatus(array|string $providerCardOrStatus): bool
+    {
+        $status = is_array($providerCardOrStatus)
+            ? (string) ($providerCardOrStatus['status'] ?? 'active')
+            : (string) $providerCardOrStatus;
+
+        return in_array(strtolower(trim($status)), [
+            'terminated',
+            'cancelled',
+            'canceled',
+            'closed',
+            'inactive',
+            'deleted',
+        ], true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $providerCard
+     */
+    protected function resolveIsActiveForProviderSync(array $providerCard, ?VirtualCard $existingCard): bool
+    {
+        if ($this->isTerminatedProviderCardStatus($providerCard)) {
+            return false;
+        }
+
+        if ($existingCard && ! $existingCard->is_active) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

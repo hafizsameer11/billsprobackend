@@ -441,4 +441,59 @@ class Visa493BinTest extends TestCase
         $this->assertEquals('v1_493', $card->metadata['pagocards_visa_api']);
         $this->assertTrue($card->is_active);
     }
+
+    public function test_get_user_cards_does_not_reactivate_locally_terminated_493_card(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/visacard/getallcards' => Http::response(['data' => []], 200),
+            'https://pagocards.test/api/v1/cards/getallcards' => Http::response([
+                'cards' => [[
+                    'cardid' => 'card_01terminated493',
+                    'useremail' => 'terminated@example.com',
+                    'lastfour' => '5430',
+                    'brand' => 'visa',
+                    'type' => 'virtual',
+                    'status' => 'active',
+                ]],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create(['email' => 'terminated@example.com']);
+        $this->makeVisaCard($user, 'card_01terminated493', ['pagocards_visa_api' => 'v1_493']);
+        VirtualCard::where('provider_card_id', 'card_01terminated493')->update([
+            'is_active' => false,
+            'provider_status' => 'terminated',
+        ]);
+
+        $cards = app(VirtualCardService::class)->getUserCards($user->id);
+
+        $this->assertCount(0, $cards);
+        $this->assertFalse(
+            (bool) VirtualCard::where('provider_card_id', 'card_01terminated493')->value('is_active')
+        );
+    }
+
+    public function test_get_user_cards_skips_importing_terminated_493_card_from_provider_list(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/visacard/getallcards' => Http::response(['data' => []], 200),
+            'https://pagocards.test/api/v1/cards/getallcards' => Http::response([
+                'cards' => [[
+                    'cardid' => 'card_01neverimported493',
+                    'useremail' => 'newuser@example.com',
+                    'lastfour' => '1111',
+                    'brand' => 'visa',
+                    'type' => 'virtual',
+                    'status' => 'terminated',
+                ]],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create(['email' => 'newuser@example.com']);
+
+        $cards = app(VirtualCardService::class)->getUserCards($user->id);
+
+        $this->assertCount(0, $cards);
+        $this->assertNull(VirtualCard::where('provider_card_id', 'card_01neverimported493')->first());
+    }
 }
