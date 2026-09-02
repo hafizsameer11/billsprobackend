@@ -50,6 +50,7 @@ use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\PushTokenController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\VirtualCardController;
+use App\Http\Controllers\Api\Visa493VirtualCardController;
 use App\Http\Controllers\Api\VisaVirtualCardController;
 use App\Http\Controllers\Api\WalletController;
 use App\Http\Controllers\Api\WithdrawalController;
@@ -418,13 +419,26 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::post('/', [VisaVirtualCardController::class, 'create']);
         Route::get('/{id}', [VisaVirtualCardController::class, 'show'])->whereNumber('id');
         Route::post('/{id}/fund', [VisaVirtualCardController::class, 'fund'])->whereNumber('id');
-        Route::get('/{id}/withdraw-estimate', [VisaVirtualCardController::class, 'withdrawEstimate'])->whereNumber('id');
-        Route::post('/{id}/withdraw', [VisaVirtualCardController::class, 'withdraw'])->whereNumber('id');
         Route::get('/{id}/terminate-estimate', [VisaVirtualCardController::class, 'terminateEstimate'])->whereNumber('id');
         Route::post('/{id}/terminate', [VisaVirtualCardController::class, 'terminate'])->whereNumber('id');
         Route::get('/{id}/transactions', [VisaVirtualCardController::class, 'transactions'])->whereNumber('id');
         Route::post('/{id}/freeze', [VisaVirtualCardController::class, 'freeze'])->whereNumber('id');
         Route::post('/{id}/unfreeze', [VisaVirtualCardController::class, 'unfreeze'])->whereNumber('id');
+    });
+
+    Route::prefix('virtual-cards/visa-493')->group(function () {
+        Route::get('/creation-fee', [Visa493VirtualCardController::class, 'creationFee']);
+        Route::get('/funding-estimate', [Visa493VirtualCardController::class, 'fundingEstimate']);
+        Route::post('/', [Visa493VirtualCardController::class, 'create']);
+        Route::get('/{id}', [Visa493VirtualCardController::class, 'show'])->whereNumber('id');
+        Route::post('/{id}/fund', [Visa493VirtualCardController::class, 'fund'])->whereNumber('id');
+        Route::get('/{id}/withdraw-estimate', [Visa493VirtualCardController::class, 'withdrawEstimate'])->whereNumber('id');
+        Route::post('/{id}/withdraw', [Visa493VirtualCardController::class, 'withdraw'])->whereNumber('id');
+        Route::get('/{id}/terminate-estimate', [Visa493VirtualCardController::class, 'terminateEstimate'])->whereNumber('id');
+        Route::post('/{id}/terminate', [Visa493VirtualCardController::class, 'terminate'])->whereNumber('id');
+        Route::get('/{id}/transactions', [Visa493VirtualCardController::class, 'transactions'])->whereNumber('id');
+        Route::post('/{id}/freeze', [Visa493VirtualCardController::class, 'freeze'])->whereNumber('id');
+        Route::post('/{id}/unfreeze', [Visa493VirtualCardController::class, 'unfreeze'])->whereNumber('id');
     });
 
     // ========================================================================

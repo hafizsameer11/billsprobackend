@@ -10,7 +10,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\VirtualCard\CreateCardRequest;
 use App\Http\Requests\VirtualCard\FundCardRequest;
 use App\Http\Requests\VirtualCard\FundingEstimateRequest;
-use App\Http\Requests\VirtualCard\WithdrawCardRequest;
 use App\Models\VirtualCard;
 use App\Services\Http\IdempotencyService;
 use App\Services\VirtualCard\VisaVirtualCardService;
@@ -150,6 +149,10 @@ class VisaVirtualCardController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         try {
+            if ($reject = $this->rejectIfVisa493Card($request->user()->id, $id)) {
+                return $reject;
+            }
+
             $card = $this->visaVirtualCardService->getCard($request->user()->id, $id);
 
             if (! $card) {
@@ -176,6 +179,10 @@ class VisaVirtualCardController extends Controller
 
             if (! $this->visaVirtualCardService->userOwnsVisaCard($userId, $id)) {
                 return ResponseHelper::notFound('Visa virtual card not found. Use the Mastercard fund endpoint for Mastercard cards.');
+            }
+
+            if ($reject = $this->rejectIfVisa493Card($userId, $id)) {
+                return $reject;
             }
 
             $idempotency = app(IdempotencyService::class);
@@ -232,6 +239,10 @@ class VisaVirtualCardController extends Controller
                 return ResponseHelper::notFound('Visa virtual card not found.');
             }
 
+            if ($reject = $this->rejectIfVisa493Card($request->user()->id, $id)) {
+                return $reject;
+            }
+
             $result = $this->virtualCardService->estimateCardTermination($request->user()->id, $id);
             if (! $result['success']) {
                 return ResponseHelper::error($result['message'] ?? 'Unable to estimate termination', $result['status'] ?? 400);
@@ -256,6 +267,10 @@ class VisaVirtualCardController extends Controller
         try {
             if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
                 return ResponseHelper::notFound('Visa virtual card not found.');
+            }
+
+            if ($reject = $this->rejectIfVisa493Card($request->user()->id, $id)) {
+                return $reject;
             }
 
             $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
@@ -291,73 +306,6 @@ class VisaVirtualCardController extends Controller
         }
     }
 
-    #[OA\Get(path: '/api/virtual-cards/visa-card/{id}/withdraw-estimate', summary: 'Estimate Visa card withdrawal refund', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
-    public function withdrawEstimate(Request $request, int $id): JsonResponse
-    {
-        try {
-            if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
-                return ResponseHelper::notFound('Visa virtual card not found.');
-            }
-
-            $amount = (float) $request->query('amount', 0);
-            $result = $this->virtualCardService->estimateCardWithdrawal($request->user()->id, $id, $amount);
-            if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Unable to estimate withdrawal', $result['status'] ?? 400);
-            }
-
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal estimate retrieved successfully.')
-                ->header('Cache-Control', 'no-store, private, must-revalidate');
-        } catch (\Exception $e) {
-            Log::error('Visa withdraw estimate error: '.$e->getMessage(), [
-                'user_id' => $request->user()->id,
-                'card_id' => $id,
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return ResponseHelper::serverError('An error occurred while estimating card withdrawal.');
-        }
-    }
-
-    #[OA\Post(path: '/api/virtual-cards/visa-card/{id}/withdraw', summary: 'Withdraw from 493 BIN Visa card', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
-    public function withdraw(WithdrawCardRequest $request, int $id): JsonResponse
-    {
-        try {
-            if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
-                return ResponseHelper::notFound('Visa virtual card not found.');
-            }
-
-            $result = $this->virtualCardService->withdrawFromCard($request->user()->id, $id, $request->validated());
-            if (! $result['success']) {
-                return ResponseHelper::error($result['message'] ?? 'Withdrawal failed', $result['status'] ?? 400);
-            }
-
-            try {
-                $amount = (float) ($request->validated()['amount'] ?? 0);
-                NotificationHelper::createTransactionNotification(
-                    $request->user(),
-                    'virtual_card',
-                    'Card withdrawal submitted',
-                    $amount > 0
-                        ? 'Your $'.number_format($amount, 2).' card withdrawal request has been processed. Your Naira wallet will be credited once the provider confirms.'
-                        : 'Your card withdrawal request has been processed.',
-                    ['action' => 'withdraw_from_card', 'amount' => $amount]
-                );
-            } catch (\Throwable $e) {
-                Log::warning('Visa virtual card withdraw notification failed: '.$e->getMessage());
-            }
-
-            return ResponseHelper::success($result['data'], $result['message'] ?? 'Withdrawal request submitted.');
-        } catch (\Exception $e) {
-            Log::error('Withdraw Visa card error: '.$e->getMessage(), [
-                'user_id' => $request->user()->id,
-                'card_id' => $id,
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return ResponseHelper::serverError('An error occurred while withdrawing from the card.');
-        }
-    }
-
     #[OA\Post(path: '/api/virtual-cards/visa-card/{id}/unfreeze', summary: 'Unfreeze Visa card', security: [['sanctum' => []]], tags: ['Visa Virtual Cards'])]
     public function unfreeze(Request $request, int $id): JsonResponse
     {
@@ -369,6 +317,10 @@ class VisaVirtualCardController extends Controller
         try {
             if (! $this->visaVirtualCardService->userOwnsVisaCard($request->user()->id, $id)) {
                 return ResponseHelper::notFound('Visa virtual card not found.');
+            }
+
+            if ($reject = $this->rejectIfVisa493Card($request->user()->id, $id)) {
+                return $reject;
             }
 
             $result = $this->visaVirtualCardService->toggleFreeze($request->user()->id, $id, $freeze);
@@ -397,6 +349,10 @@ class VisaVirtualCardController extends Controller
                 return ResponseHelper::notFound('Visa virtual card not found.');
             }
 
+            if ($reject = $this->rejectIfVisa493Card($request->user()->id, $id)) {
+                return $reject;
+            }
+
             $limit = (int) $request->query('limit', 50);
             $limit = max(1, min(100, $limit));
             $data = $this->visaVirtualCardService->getCardTransactions($request->user()->id, $id, $limit);
@@ -411,5 +367,17 @@ class VisaVirtualCardController extends Controller
 
             return ResponseHelper::serverError('An error occurred while retrieving transactions.');
         }
+    }
+
+    protected function rejectIfVisa493Card(int $userId, int $cardId): ?JsonResponse
+    {
+        if ($this->virtualCardService->userOwnsVisa493Card($userId, $cardId)) {
+            return ResponseHelper::error(
+                'This card uses the 493 BIN Visa API. Use /api/virtual-cards/visa-493 endpoints.',
+                422
+            );
+        }
+
+        return null;
     }
 }

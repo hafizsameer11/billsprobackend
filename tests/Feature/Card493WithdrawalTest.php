@@ -113,7 +113,7 @@ class Card493WithdrawalTest extends TestCase
         $this->seedFundingRate($user, $card, 1550.0);
         Sanctum::actingAs($user);
 
-        $response = $this->getJson("/api/virtual-cards/visa-card/{$card->id}/withdraw-estimate?amount=10");
+        $response = $this->getJson("/api/virtual-cards/visa-493/{$card->id}/withdraw-estimate?amount=10");
 
         $response->assertOk()
             ->assertJsonPath('data.withdrawal_usd', 10)
@@ -136,7 +136,7 @@ class Card493WithdrawalTest extends TestCase
         $this->seedVisaFundRate(1480.0);
         Sanctum::actingAs($user);
 
-        $response = $this->getJson("/api/virtual-cards/visa-card/{$card->id}/withdraw-estimate?amount=10");
+        $response = $this->getJson("/api/virtual-cards/visa-493/{$card->id}/withdraw-estimate?amount=10");
 
         $response->assertOk()
             ->assertJsonPath('data.exchange_rate_ngn_per_usd', 1480)
@@ -162,7 +162,7 @@ class Card493WithdrawalTest extends TestCase
         $this->seedFundingRate($user, $card, 1500.0);
         Sanctum::actingAs($user);
 
-        $response = $this->postJson("/api/virtual-cards/visa-card/{$card->id}/withdraw", ['amount' => 10]);
+        $response = $this->postJson("/api/virtual-cards/visa-493/{$card->id}/withdraw", ['amount' => 10]);
 
         $response->assertOk()
             ->assertJsonPath('success', true);
@@ -256,7 +256,7 @@ class Card493WithdrawalTest extends TestCase
         $this->seedFundingRate($user, $card, 1500.0);
         Sanctum::actingAs($user);
 
-        $response = $this->postJson("/api/virtual-cards/visa-card/{$card->id}/terminate");
+        $response = $this->postJson("/api/virtual-cards/visa-493/{$card->id}/terminate");
 
         $response->assertOk()->assertJsonPath('success', true);
 
@@ -294,13 +294,13 @@ class Card493WithdrawalTest extends TestCase
         $card = $this->make493VisaCard($user, 0);
         Sanctum::actingAs($user);
 
-        $this->getJson("/api/virtual-cards/visa-card/{$card->id}/terminate-estimate")
+        $this->getJson("/api/virtual-cards/visa-493/{$card->id}/terminate-estimate")
             ->assertOk()
             ->assertJsonPath('data.can_terminate', true)
             ->assertJsonPath('data.refundable_usd', 0)
             ->assertJsonPath('data.refund_via', 'terminate_only');
 
-        $this->postJson("/api/virtual-cards/visa-card/{$card->id}/terminate")
+        $this->postJson("/api/virtual-cards/visa-493/{$card->id}/terminate")
             ->assertOk()
             ->assertJsonPath('success', true);
 
@@ -330,7 +330,10 @@ class Card493WithdrawalTest extends TestCase
         ]);
         Sanctum::actingAs($user);
 
+        $this->postJson("/api/virtual-cards/visa-493/{$card->id}/withdraw", ['amount' => 5])
+            ->assertStatus(404);
+
         $this->postJson("/api/virtual-cards/visa-card/{$card->id}/withdraw", ['amount' => 5])
-            ->assertStatus(422);
+            ->assertStatus(404);
     }
 }

@@ -160,7 +160,7 @@ class Visa493BinTest extends TestCase
         $this->seedNairaWallet($user, 50000);
         Sanctum::actingAs($user);
 
-        $response = $this->postJson('/api/virtual-cards/visa-card', [
+        $response = $this->postJson('/api/virtual-cards/visa-493', [
             'payment_wallet_type' => 'naira_wallet',
             'payment_wallet_currency' => 'NGN',
             'card_name' => 'My Visa',
@@ -189,6 +189,47 @@ class Visa493BinTest extends TestCase
                 && ($body['email'] ?? null) === 'jane@example.com'
                 && ! array_key_exists('initial_load', $body);
         });
+    }
+
+    public function test_legacy_visa_create_route_uses_visacard_endpoint_when_493_enabled(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/visacard/createcard' => Http::response([
+                'status' => 'success',
+                'message' => 'Card created successfully.',
+                'data' => [
+                    'cardid' => 'legacy-create-visa-1',
+                    'card_number' => '4111111111111111',
+                    'cvv' => '123',
+                    'expiry_month' => '12',
+                    'expiry_year' => '2030',
+                    'balance' => 0,
+                ],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create([
+            'email' => 'legacy-create@example.com',
+            'first_name' => 'Legacy',
+            'last_name' => 'Visa',
+        ]);
+        $this->seedNairaWallet($user, 50000);
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/virtual-cards/visa-card', [
+            'payment_wallet_type' => 'naira_wallet',
+            'payment_wallet_currency' => 'NGN',
+            'card_name' => 'Legacy Visa',
+        ]);
+
+        $response->assertSuccessful()->assertJsonPath('success', true);
+
+        $card = VirtualCard::where('user_id', $user->id)->first();
+        $this->assertNotNull($card);
+        $this->assertEquals('legacy', $card->metadata['pagocards_visa_api']);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://pagocards.test/api/visacard/createcard');
+        Http::assertNotSent(fn ($request) => $request->url() === 'https://pagocards.test/api/v1/cards');
     }
 
     public function test_legacy_visa_card_fund_uses_visacard_endpoint(): void
@@ -373,7 +414,7 @@ class Visa493BinTest extends TestCase
         $this->seedNairaWallet($user, 50000);
         Sanctum::actingAs($user);
 
-        $response = $this->postJson('/api/virtual-cards/visa-card', [
+        $response = $this->postJson('/api/virtual-cards/visa-493', [
             'payment_wallet_type' => 'naira_wallet',
             'payment_wallet_currency' => 'NGN',
             'card_name' => 'Strip Card',
