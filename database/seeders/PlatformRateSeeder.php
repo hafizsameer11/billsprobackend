@@ -168,7 +168,7 @@ class PlatformRateSeeder extends Seeder
                 'fixed_fee_ngn' => 0,
                 'percentage_fee' => null,
                 'min_fee_ngn' => null,
-                'fee_usd' => 3.0,
+                'fee_usd' => 8.0,
             ],
             [
                 'category' => 'virtual_card',

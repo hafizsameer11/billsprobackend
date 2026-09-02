@@ -8,6 +8,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Models\VirtualCard;
 use App\Models\VirtualCardTransaction;
+use App\Services\Platform\PlatformRateResolver;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,7 @@ class VirtualCard493WithdrawalService
     public function __construct(
         protected Visa493BinApiClient $visa493BinApiClient,
         protected WalletService $walletService,
+        protected PlatformRateResolver $platformRates,
     ) {}
 
     /**
@@ -52,14 +54,8 @@ class VirtualCard493WithdrawalService
             ];
         }
 
-        $exchangeRate = $this->resolveLastFundingExchangeRateNgnPerUsd($cardId, $userId);
-        if ($exchangeRate === null) {
-            return [
-                'success' => false,
-                'message' => 'Fund this card from your Naira wallet at least once before withdrawing.',
-                'status' => 422,
-            ];
-        }
+        $rateQuote = $this->resolveWithdrawExchangeRate($cardId, $userId);
+        $exchangeRate = $rateQuote['rate'];
 
         $refundNgn = round($amountUsd * $exchangeRate, 2);
 
@@ -71,6 +67,7 @@ class VirtualCard493WithdrawalService
                 'withdrawal_usd' => $amountUsd,
                 'card_balance_usd' => $balanceUsd,
                 'exchange_rate_ngn_per_usd' => $exchangeRate,
+                'exchange_rate_source' => $rateQuote['source'],
                 'refund_ngn' => $refundNgn,
                 'refund_currency' => 'NGN',
                 'can_withdraw' => true,
@@ -93,7 +90,20 @@ class VirtualCard493WithdrawalService
 
     public function lastFundingExchangeRateNgnPerUsd(int $virtualCardId, int $userId): ?float
     {
-        return $this->resolveLastFundingExchangeRateNgnPerUsd($virtualCardId, $userId);
+        return $this->resolveWithdrawExchangeRate($virtualCardId, $userId)['rate'];
+    }
+
+    /**
+     * @return array{rate: float, source: 'last_funding'|'visa_fund'}
+     */
+    public function resolveWithdrawExchangeRate(int $virtualCardId, int $userId): array
+    {
+        $fromFunding = $this->rateFromLastFundingTransaction($virtualCardId, $userId);
+        if ($fromFunding !== null) {
+            return ['rate' => $fromFunding, 'source' => 'last_funding'];
+        }
+
+        return ['rate' => $this->visaFundExchangeRateNgnPerUsd(), 'source' => 'visa_fund'];
     }
 
     protected function initiateInternal(
@@ -421,7 +431,17 @@ class VirtualCard493WithdrawalService
             ->first();
     }
 
-    protected function resolveLastFundingExchangeRateNgnPerUsd(int $virtualCardId, int $userId): ?float
+    protected function visaFundExchangeRateNgnPerUsd(): float
+    {
+        $r = $this->platformRates->findVirtualCard(VirtualCardService::PLATFORM_VISA_FUND);
+        if ($r && $r->exchange_rate_ngn_per_usd !== null) {
+            return max(0.0001, (float) $r->exchange_rate_ngn_per_usd);
+        }
+
+        return max(0.0001, (float) config('virtual_card.usd_to_ngn_rate', 1500.0));
+    }
+
+    protected function rateFromLastFundingTransaction(int $virtualCardId, int $userId): ?float
     {
         $tx = Transaction::query()
             ->where('user_id', $userId)

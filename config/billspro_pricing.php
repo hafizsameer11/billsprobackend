@@ -44,7 +44,7 @@ return [
         ],
         'visa_creation' => [
             'label' => 'Visa Card Issuance',
-            'fee_usd' => 3,
+            'fee_usd' => 8,
             'provider_cost_usd' => 3,
         ],
         'visa_fund' => [

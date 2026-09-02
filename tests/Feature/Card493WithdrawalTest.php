@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\FiatWallet;
+use App\Models\PlatformRate;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\VirtualCard;
@@ -51,6 +52,25 @@ class Card493WithdrawalTest extends TestCase
         ]);
     }
 
+    private function seedVisaFundRate(float $rate = 1500.0): void
+    {
+        $m = new PlatformRate([
+            'category' => 'virtual_card',
+            'service_key' => 'visa_fund',
+            'sub_service_key' => null,
+            'crypto_asset' => null,
+            'network_key' => null,
+            'exchange_rate_ngn_per_usd' => $rate,
+            'fixed_fee_ngn' => 0,
+            'fee_usd' => 1.0,
+            'is_active' => true,
+        ]);
+        PlatformRate::query()->updateOrCreate(
+            ['slug' => PlatformRate::composeSlug($m)],
+            array_merge($m->toArray(), ['slug' => PlatformRate::composeSlug($m)])
+        );
+    }
+
     private function seedFundingRate(User $user, VirtualCard $card, float $rate = 1550.0): void
     {
         Transaction::query()->create([
@@ -89,6 +109,7 @@ class Card493WithdrawalTest extends TestCase
 
         $user = User::factory()->create();
         $card = $this->make493VisaCard($user);
+        $this->seedVisaFundRate(1500.0);
         $this->seedFundingRate($user, $card, 1550.0);
         Sanctum::actingAs($user);
 
@@ -97,7 +118,30 @@ class Card493WithdrawalTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.withdrawal_usd', 10)
             ->assertJsonPath('data.exchange_rate_ngn_per_usd', 1550)
+            ->assertJsonPath('data.exchange_rate_source', 'last_funding')
             ->assertJsonPath('data.refund_ngn', 15500);
+    }
+
+    public function test_withdraw_estimate_falls_back_to_visa_fund_rate_without_prior_funding(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::response([
+                'status' => 'success',
+                'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 25]],
+            ], 200),
+        ]);
+
+        $user = User::factory()->create();
+        $card = $this->make493VisaCard($user);
+        $this->seedVisaFundRate(1480.0);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/virtual-cards/visa-card/{$card->id}/withdraw-estimate?amount=10");
+
+        $response->assertOk()
+            ->assertJsonPath('data.exchange_rate_ngn_per_usd', 1480)
+            ->assertJsonPath('data.exchange_rate_source', 'visa_fund')
+            ->assertJsonPath('data.refund_ngn', 14800);
     }
 
     public function test_withdraw_submits_provider_request_and_creates_pending_ledger(): void

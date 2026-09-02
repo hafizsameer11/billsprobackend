@@ -1793,20 +1793,12 @@ class VirtualCardService
 
         $balanceUsd = round(max(0, (float) $card->balance), 2);
         $refundableUsd = round(max(0, $balanceUsd - $terminationFeeUsd), 2);
-        $fundingRate = $this->isVisa493BinCard($card)
-            ? $this->visa493Withdrawal->lastFundingExchangeRateNgnPerUsd((int) $card->id, (int) $card->user_id)
+        $withdrawRateQuote = $this->isVisa493BinCard($card)
+            ? $this->visa493Withdrawal->resolveWithdrawExchangeRate((int) $card->id, (int) $card->user_id)
             : null;
-        $rateForRefund = $this->isVisa493BinCard($card) && $fundingRate !== null ? $fundingRate : $sellRate;
+        $rateForRefund = $withdrawRateQuote !== null ? $withdrawRateQuote['rate'] : $sellRate;
         $refundNgn = round($refundableUsd * $rateForRefund, 2);
         $canTerminate = $balanceUsd + 0.0001 >= $terminationFeeUsd;
-        if ($this->isVisa493BinCard($card) && $refundableUsd >= 0.01 && $fundingRate === null) {
-            $canTerminate = false;
-        }
-
-        $blockReason = null;
-        if ($this->isVisa493BinCard($card) && $refundableUsd >= 0.01 && $fundingRate === null) {
-            $blockReason = 'Fund this card from your Naira wallet at least once before terminating with a balance.';
-        }
 
         return [
             'card_id' => (int) $card->id,
@@ -1820,8 +1812,8 @@ class VirtualCardService
             'can_terminate' => $canTerminate,
             'minimum_balance_usd' => $terminationFeeUsd,
             'refund_via' => $this->isVisa493BinCard($card) ? 'withdraw_webhook' : 'immediate',
-            'exchange_rate_source' => $this->isVisa493BinCard($card) ? 'last_funding' : 'terminate_sell',
-            'block_reason' => $blockReason,
+            'exchange_rate_source' => $withdrawRateQuote['source'] ?? 'terminate_sell',
+            'block_reason' => null,
         ];
     }
 
