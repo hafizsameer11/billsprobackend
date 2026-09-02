@@ -39,7 +39,7 @@ class Visa493VirtualCardController extends Controller
         try {
             $quote = $this->visa493VirtualCardService->getCreationFeeQuote();
 
-            return ResponseHelper::success($quote, '493 BIN Visa creation fee quote retrieved successfully.')
+            return ResponseHelper::success($quote, 'Visa creation fee quote retrieved successfully.')
                 ->header('Cache-Control', 'no-store, private, must-revalidate');
         } catch (\Exception $e) {
             Log::error('493 BIN Visa creation fee quote error: '.$e->getMessage(), [
@@ -47,7 +47,7 @@ class Visa493VirtualCardController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while retrieving the 493 BIN Visa creation fee.');
+            return ResponseHelper::serverError('An error occurred while retrieving the Visa creation fee.');
         }
     }
 
@@ -62,7 +62,7 @@ class Visa493VirtualCardController extends Controller
                 (string) ($v['payment_wallet_currency'] ?? 'NGN')
             );
 
-            return ResponseHelper::success($estimate, '493 BIN Visa funding estimate retrieved successfully.')
+            return ResponseHelper::success($estimate, 'Visa funding estimate retrieved successfully.')
                 ->header('Cache-Control', 'no-store, private, must-revalidate');
         } catch (\Exception $e) {
             Log::error('493 BIN Visa funding estimate error: '.$e->getMessage(), [
@@ -70,7 +70,7 @@ class Visa493VirtualCardController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while computing the 493 BIN Visa funding estimate.');
+            return ResponseHelper::serverError('An error occurred while computing the Visa funding estimate.');
         }
     }
 
@@ -100,15 +100,15 @@ class Visa493VirtualCardController extends Controller
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
-                    '493 BIN Visa Card Created',
-                    'Your 493 BIN Visa virtual card was created successfully.',
+                    'Visa Card Created',
+                    'Your Visa virtual card was created successfully.',
                     ['action' => 'create_visa_493_card']
                 );
             } catch (\Throwable $e) {
                 Log::warning('493 BIN Visa create notification failed: '.$e->getMessage());
             }
 
-            $response = ResponseHelper::success($result['data'], $result['message'] ?? '493 BIN Visa card created successfully.');
+            $response = ResponseHelper::success($result['data'], $result['message'] ?? 'Visa card created successfully.');
             $idempotency->store($request, $userId, 'virtual-cards.visa-493.create', 200, $response->getData(true));
 
             return $response;
@@ -118,7 +118,7 @@ class Visa493VirtualCardController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return ResponseHelper::serverError('An error occurred while creating the 493 BIN Visa card.');
+            return ResponseHelper::serverError('An error occurred while creating the Visa card.');
         }
     }
 
@@ -129,7 +129,7 @@ class Visa493VirtualCardController extends Controller
             $card = $this->visa493VirtualCardService->getCard($request->user()->id, $id);
 
             if (! $card) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             return ResponseHelper::success($card, 'Card details retrieved successfully.');
@@ -151,7 +151,7 @@ class Visa493VirtualCardController extends Controller
             $userId = $request->user()->id;
 
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($userId, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $idempotency = app(IdempotencyService::class);
@@ -171,8 +171,8 @@ class Visa493VirtualCardController extends Controller
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
-                    '493 BIN Visa Card Funded',
-                    $amount ? 'Your 493 BIN Visa card was funded with '.MoneyFormatHelper::format($amount, 'USD').'.' : 'Your 493 BIN Visa card was funded successfully.',
+                    'Visa Card Funded',
+                    $amount ? 'Your Visa card was funded with '.MoneyFormatHelper::format($amount, 'USD').'.' : 'Your Visa card was funded successfully.',
                     ['action' => 'fund_visa_493_card', 'amount' => $amount]
                 );
             } catch (\Throwable $e) {
@@ -211,7 +211,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $result = $this->virtualCardService->estimateCardTermination($request->user()->id, $id);
@@ -237,7 +237,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $result = $this->virtualCardService->terminateCard($request->user()->id, $id);
@@ -248,12 +248,12 @@ class Visa493VirtualCardController extends Controller
             try {
                 $refundNgn = (float) data_get($result, 'data.termination.refund_ngn', 0);
                 $body = $refundNgn > 0
-                    ? 'Your 493 BIN Visa card has been terminated. ₦'.number_format($refundNgn, 2).' will be credited to your Naira wallet after provider confirmation.'
-                    : 'Your 493 BIN Visa card has been terminated successfully.';
+                    ? 'Your Visa card has been terminated. ₦'.number_format($refundNgn, 2).' will be credited to your Naira wallet after provider confirmation.'
+                    : 'Your Visa card has been terminated successfully.';
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
-                    '493 BIN Visa Card Terminated',
+                    'Visa Card Terminated',
                     $body,
                     ['action' => 'terminate_visa_493_card']
                 );
@@ -278,7 +278,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $amount = (float) $request->query('amount', 0);
@@ -305,7 +305,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $result = $this->virtualCardService->withdrawFromCard($request->user()->id, $id, $request->validated());
@@ -318,7 +318,7 @@ class Visa493VirtualCardController extends Controller
                 NotificationHelper::createTransactionNotification(
                     $request->user(),
                     'virtual_card',
-                    '493 BIN Visa withdrawal submitted',
+                    'Visa withdrawal submitted',
                     $amount > 0
                         ? 'Your $'.number_format($amount, 2).' card withdrawal request has been processed. Your Naira wallet will be credited once the provider confirms.'
                         : 'Your card withdrawal request has been processed.',
@@ -345,7 +345,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $limit = (int) $request->query('limit', 50);
@@ -368,7 +368,7 @@ class Visa493VirtualCardController extends Controller
     {
         try {
             if (! $this->visa493VirtualCardService->userOwnsVisa493Card($request->user()->id, $id)) {
-                return ResponseHelper::notFound('493 BIN Visa card not found.');
+                return ResponseHelper::notFound('Visa card not found.');
             }
 
             $result = $this->visa493VirtualCardService->toggleFreeze($request->user()->id, $id, $freeze);

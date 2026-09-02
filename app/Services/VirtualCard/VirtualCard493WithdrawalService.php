@@ -94,7 +94,7 @@ class VirtualCard493WithdrawalService
     }
 
     /**
-     * @return array{rate: float, source: 'last_funding'|'visa_fund'}
+     * @return array{rate: float, source: 'last_funding'|'visa_493_fund'}
      */
     public function resolveWithdrawExchangeRate(int $virtualCardId, int $userId): array
     {
@@ -103,7 +103,7 @@ class VirtualCard493WithdrawalService
             return ['rate' => $fromFunding, 'source' => 'last_funding'];
         }
 
-        return ['rate' => $this->visaFundExchangeRateNgnPerUsd(), 'source' => 'visa_fund'];
+        return ['rate' => $this->visa493FundExchangeRateNgnPerUsd(), 'source' => 'visa_493_fund'];
     }
 
     protected function initiateInternal(
@@ -560,9 +560,9 @@ class VirtualCard493WithdrawalService
         return in_array($status, [408, 502, 503, 504], true) || $status >= 500;
     }
 
-    protected function visaFundExchangeRateNgnPerUsd(): float
+    protected function visa493FundExchangeRateNgnPerUsd(): float
     {
-        $r = $this->platformRates->findVirtualCard(VirtualCardService::PLATFORM_VISA_FUND);
+        $r = $this->platformRates->findVirtualCard(VirtualCardService::PLATFORM_VISA_493_FUND);
         if ($r && $r->exchange_rate_ngn_per_usd !== null) {
             return max(0.0001, (float) $r->exchange_rate_ngn_per_usd);
         }

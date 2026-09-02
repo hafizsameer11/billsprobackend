@@ -37,7 +37,10 @@ class Visa493BinTest extends TestCase
         foreach (
             [
                 ['service_key' => 'visa_creation', 'fee_usd' => 8.0, 'exchange_rate_ngn_per_usd' => 1500.0],
-                ['service_key' => 'visa_fund', 'fee_usd' => 1.0, 'exchange_rate_ngn_per_usd' => 1500.0],
+                ['service_key' => 'visa_fund', 'fee_usd' => 2.0, 'exchange_rate_ngn_per_usd' => 2000.0],
+                ['service_key' => 'visa_493_creation', 'fee_usd' => 8.0, 'exchange_rate_ngn_per_usd' => 1500.0],
+                ['service_key' => 'visa_493_fund', 'fee_usd' => 1.0, 'exchange_rate_ngn_per_usd' => 1600.0],
+                ['service_key' => 'visa_493_terminate', 'fee_usd' => 1.0, 'exchange_rate_ngn_per_usd' => 1420.0],
             ] as $row
         ) {
             $m = new PlatformRate([
@@ -432,5 +435,31 @@ class Visa493BinTest extends TestCase
             return $request->url() === 'https://pagocards.test/api/v1/cards/card_01strip493/withdraw'
                 && (float) ($request['amount'] ?? 0) === 5.0;
         });
+    }
+
+    public function test_visa_493_creation_fee_uses_separate_platform_rates(): void
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/virtual-cards/visa-493/creation-fee');
+
+        $response->assertOk()
+            ->assertJsonPath('data.card_scheme', 'visa_493')
+            ->assertJsonPath('data.card_program.fund_exchange_rate_ngn_per_usd', 1600)
+            ->assertJsonPath('data.card_program.card_funding_fee_usd', 1);
+    }
+
+    public function test_visa_493_funding_estimate_uses_separate_platform_rates(): void
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/virtual-cards/visa-493/funding-estimate?amount=100&payment_wallet_type=naira_wallet');
+
+        $response->assertOk()
+            ->assertJsonPath('data.exchange_rate_ngn_per_usd', 1600)
+            ->assertJsonPath('data.card_funding_fee_usd', 1)
+            ->assertJsonPath('data.charge_ngn', 161600);
     }
 }

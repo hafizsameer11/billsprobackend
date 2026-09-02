@@ -52,17 +52,17 @@ class Card493WithdrawalTest extends TestCase
         ]);
     }
 
-    private function seedVisaFundRate(float $rate = 1500.0): void
+    private function seedVisa493FundRate(float $rate = 1500.0, float $feeUsd = 1.0): void
     {
         $m = new PlatformRate([
             'category' => 'virtual_card',
-            'service_key' => 'visa_fund',
+            'service_key' => 'visa_493_fund',
             'sub_service_key' => null,
             'crypto_asset' => null,
             'network_key' => null,
             'exchange_rate_ngn_per_usd' => $rate,
             'fixed_fee_ngn' => 0,
-            'fee_usd' => 1.0,
+            'fee_usd' => $feeUsd,
             'is_active' => true,
         ]);
         PlatformRate::query()->updateOrCreate(
@@ -109,7 +109,7 @@ class Card493WithdrawalTest extends TestCase
 
         $user = User::factory()->create();
         $card = $this->make493VisaCard($user);
-        $this->seedVisaFundRate(1500.0);
+        $this->seedVisa493FundRate(1500.0);
         $this->seedFundingRate($user, $card, 1550.0);
         Sanctum::actingAs($user);
 
@@ -122,7 +122,7 @@ class Card493WithdrawalTest extends TestCase
             ->assertJsonPath('data.refund_ngn', 15500);
     }
 
-    public function test_withdraw_estimate_falls_back_to_visa_fund_rate_without_prior_funding(): void
+    public function test_withdraw_estimate_falls_back_to_visa_493_fund_rate_without_prior_funding(): void
     {
         Http::fake([
             'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::response([
@@ -133,14 +133,14 @@ class Card493WithdrawalTest extends TestCase
 
         $user = User::factory()->create();
         $card = $this->make493VisaCard($user);
-        $this->seedVisaFundRate(1480.0);
+        $this->seedVisa493FundRate(1480.0);
         Sanctum::actingAs($user);
 
         $response = $this->getJson("/api/virtual-cards/visa-493/{$card->id}/withdraw-estimate?amount=10");
 
         $response->assertOk()
             ->assertJsonPath('data.exchange_rate_ngn_per_usd', 1480)
-            ->assertJsonPath('data.exchange_rate_source', 'visa_fund')
+            ->assertJsonPath('data.exchange_rate_source', 'visa_493_fund')
             ->assertJsonPath('data.refund_ngn', 14800);
     }
 

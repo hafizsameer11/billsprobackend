@@ -18,7 +18,7 @@ class Visa493VirtualCardService
      */
     public function getCreationFeeQuote(): array
     {
-        return $this->virtualCards->getVisaCreationFeeQuote();
+        return $this->virtualCards->getVisa493CreationFeeQuote();
     }
 
     /**
@@ -26,7 +26,7 @@ class Visa493VirtualCardService
      */
     public function estimateFunding(float $principalUsd, string $paymentWalletType, string $fiatCurrency = 'NGN'): array
     {
-        return $this->virtualCards->estimateVisaCardFunding($principalUsd, $paymentWalletType, $fiatCurrency);
+        return $this->virtualCards->estimateVisa493CardFunding($principalUsd, $paymentWalletType, $fiatCurrency);
     }
 
     /**

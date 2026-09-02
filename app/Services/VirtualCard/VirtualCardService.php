@@ -25,9 +25,15 @@ class VirtualCardService
 
     public const PLATFORM_VISA_FUND = 'visa_fund';
 
+    public const PLATFORM_VISA_493_CREATION = 'visa_493_creation';
+
+    public const PLATFORM_VISA_493_FUND = 'visa_493_fund';
+
     public const PLATFORM_TERMINATE = 'terminate';
 
     public const PLATFORM_VISA_TERMINATE = 'visa_terminate';
+
+    public const PLATFORM_VISA_493_TERMINATE = 'visa_493_terminate';
 
     public const PAGOCARDS_VISA_API_LEGACY = 'legacy';
 
@@ -610,8 +616,8 @@ class VirtualCardService
         $paymentWalletType = (string) ($data['payment_wallet_type'] ?? '');
         $fiatCurrency = (string) ($data['payment_wallet_currency'] ?? 'NGN');
 
-        $feeUsd = $this->resolveCreationFeeUsdForServiceKey(self::PLATFORM_VISA_CREATION);
-        $feeNgn = round($feeUsd * $this->resolveCreationRateNgnPerUsdForServiceKey(self::PLATFORM_VISA_CREATION), 2);
+        $feeUsd = $this->resolveCreationFeeUsdForServiceKey(self::PLATFORM_VISA_493_CREATION);
+        $feeNgn = round($feeUsd * $this->resolveCreationRateNgnPerUsdForServiceKey(self::PLATFORM_VISA_493_CREATION), 2);
 
         if ($paymentWalletType === 'naira_wallet') {
             $wallet = $this->walletService->getFiatWallet($userId, $fiatCurrency, 'NG');
@@ -944,11 +950,37 @@ class VirtualCardService
      */
     public function getVisaCreationFeeQuote(): array
     {
-        $feeUsd = $this->resolveCreationFeeUsdForServiceKey(self::PLATFORM_VISA_CREATION);
-        $rate = $this->resolveCreationRateNgnPerUsdForServiceKey(self::PLATFORM_VISA_CREATION);
+        return $this->buildVisaCreationFeeQuote(
+            self::PLATFORM_VISA_CREATION,
+            self::PLATFORM_VISA_FUND,
+            'visa',
+        );
+    }
+
+    /**
+     * 493 BIN Visa creation fee + fund program preview from `virtual_card` / `visa_493_creation` and `visa_493_fund`.
+     *
+     * @return array<string, mixed>
+     */
+    public function getVisa493CreationFeeQuote(): array
+    {
+        return $this->buildVisaCreationFeeQuote(
+            self::PLATFORM_VISA_493_CREATION,
+            self::PLATFORM_VISA_493_FUND,
+            'visa_493',
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function buildVisaCreationFeeQuote(string $creationServiceKey, string $fundServiceKey, string $cardScheme): array
+    {
+        $feeUsd = $this->resolveCreationFeeUsdForServiceKey($creationServiceKey);
+        $rate = $this->resolveCreationRateNgnPerUsdForServiceKey($creationServiceKey);
         $feeNgn = round($feeUsd * $rate, 2);
 
-        $rFund = $this->platformRates->findVirtualCard(self::PLATFORM_VISA_FUND);
+        $rFund = $this->platformRates->findVirtualCard($fundServiceKey);
         $fundRate = $rFund && $rFund->exchange_rate_ngn_per_usd !== null
             ? (float) $rFund->exchange_rate_ngn_per_usd
             : (float) config('virtual_card.usd_to_ngn_rate', 1500.0);
@@ -958,12 +990,13 @@ class VirtualCardService
         $fundPct = $rFund && $rFund->percentage_fee !== null
             ? (float) $rFund->percentage_fee
             : (float) config('virtual_card.fund_load_percent', 1.0);
+        $cardFundingFeeUsd = $this->resolveCardFundingFeeUsdForDisplay($rFund, $fundRate);
 
         return [
             'fee_usd' => $feeUsd,
             'exchange_rate_ngn_per_usd' => $rate,
             'fee_ngn' => $feeNgn,
-            'card_scheme' => 'visa',
+            'card_scheme' => $cardScheme,
             'card_program' => [
                 'billspro_spend_fee_percent' => 0.0,
                 'fund_include_provider_load_fee' => $includeLoad,
@@ -971,6 +1004,7 @@ class VirtualCardService
                 'fund_load_percent' => $fundPct,
                 'fund_processing_fee_ngn' => round($fundProcessingNgn, 2),
                 'fund_exchange_rate_ngn_per_usd' => max(0.0001, $fundRate),
+                'card_funding_fee_usd' => $cardFundingFeeUsd,
             ],
         ];
     }
@@ -1144,11 +1178,19 @@ class VirtualCardService
 
     protected function fundPlatformServiceKeyForCard(VirtualCard $card): string
     {
+        if ($this->isVisa493BinCard($card)) {
+            return self::PLATFORM_VISA_493_FUND;
+        }
+
         return $this->isVisaCard($card) ? self::PLATFORM_VISA_FUND : 'fund';
     }
 
     protected function terminatePlatformServiceKeyForCard(VirtualCard $card): string
     {
+        if ($this->isVisa493BinCard($card)) {
+            return self::PLATFORM_VISA_493_TERMINATE;
+        }
+
         return $this->isVisaCard($card) ? self::PLATFORM_VISA_TERMINATE : self::PLATFORM_TERMINATE;
     }
 
@@ -1250,6 +1292,16 @@ class VirtualCardService
     public function estimateVisaCardFunding(float $principalUsd, string $paymentWalletType, string $fiatCurrency = 'NGN'): array
     {
         return $this->computeFundWalletCharges($principalUsd, $paymentWalletType, $fiatCurrency, self::PLATFORM_VISA_FUND);
+    }
+
+    /**
+     * Funding quote using admin `virtual_card` / `visa_493_fund`.
+     *
+     * @return array<string, mixed>
+     */
+    public function estimateVisa493CardFunding(float $principalUsd, string $paymentWalletType, string $fiatCurrency = 'NGN'): array
+    {
+        return $this->computeFundWalletCharges($principalUsd, $paymentWalletType, $fiatCurrency, self::PLATFORM_VISA_493_FUND);
     }
 
     /**
