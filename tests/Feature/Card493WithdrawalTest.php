@@ -410,12 +410,13 @@ class Card493WithdrawalTest extends TestCase
         $this->assertFalse($card->is_active);
     }
 
-    public function test_terminate_493_with_zero_balance_skips_withdraw(): void
+    public function test_terminate_493_with_zero_balance_charges_naira_wallet_fee(): void
     {
         Http::fake([
-            'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::sequence()
-                ->push(['status' => 'success', 'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 0]]], 200)
-                ->push(['status' => 'success', 'message' => 'Card terminated'], 200),
+            'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::response([
+                'status' => 'success',
+                'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 0]],
+            ], 200),
             'https://pagocards.test/api/v1/cards/card_01withdraw493/terminate' => Http::response([
                 'status' => 'success',
                 'message' => 'Card terminated',
@@ -423,20 +424,40 @@ class Card493WithdrawalTest extends TestCase
         ]);
 
         $user = User::factory()->create();
+        FiatWallet::query()->create([
+            'user_id' => $user->id,
+            'currency' => 'NGN',
+            'country_code' => 'NG',
+            'balance' => 5000,
+            'locked_balance' => 0,
+            'is_active' => true,
+        ]);
         $card = $this->make493VisaCard($user, 0);
+        $this->seedFundingRate($user, $card, 1449.0);
         Sanctum::actingAs($user);
 
         $this->getJson("/api/virtual-cards/visa-493/{$card->id}/terminate-estimate")
             ->assertOk()
             ->assertJsonPath('data.can_terminate', true)
             ->assertJsonPath('data.refundable_usd', 0)
-            ->assertJsonPath('data.refund_via', 'terminate_only');
+            ->assertJsonPath('data.refund_via', 'naira_wallet_fee')
+            ->assertJsonPath('data.fee_charge_ngn', 1449);
 
         $this->postJson("/api/virtual-cards/visa-493/{$card->id}/terminate")
             ->assertOk()
             ->assertJsonPath('success', true);
 
         Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/withdraw'));
+
+        $wallet = FiatWallet::where('user_id', $user->id)->first();
+        $this->assertEquals(3551.0, (float) $wallet->balance);
+
+        $this->assertDatabaseHas('transactions', [
+            'user_id' => $user->id,
+            'type' => 'card_termination_fee',
+            'status' => 'completed',
+            'amount' => 1449,
+        ]);
     }
 
     public function test_legacy_visa_card_withdraw_is_rejected(): void

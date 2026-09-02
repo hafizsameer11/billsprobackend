@@ -2043,7 +2043,29 @@ class VirtualCardService
             : null;
         $rateForRefund = $withdrawRateQuote !== null ? $withdrawRateQuote['rate'] : $sellRate;
         $refundNgn = round($refundableUsd * $rateForRefund, 2);
+        $is493ZeroBalance = $this->isVisa493BinCard($card) && $balanceUsd < 0.01;
+        $feeChargeNgn = null;
+        $blockReason = null;
         $canTerminate = $balanceUsd < 0.01 || $balanceUsd + 0.0001 >= $terminationFeeUsd;
+
+        $refundVia = $this->isVisa493BinCard($card)
+            ? ($refundableUsd >= 0.01 ? 'withdraw_webhook' : 'terminate_only')
+            : 'immediate';
+
+        if ($is493ZeroBalance) {
+            $feeChargeNgn = round($terminationFeeUsd * $rateForRefund, 2);
+            $refundVia = 'naira_wallet_fee';
+            $wallet = $this->walletService->getFiatWallet((int) $card->user_id, 'NGN', 'NG');
+            $walletBalance = $wallet ? (float) $wallet->balance : 0;
+            $canTerminate = $walletBalance + 0.0001 >= $feeChargeNgn;
+            $blockReason = $canTerminate
+                ? null
+                : 'Insufficient Naira wallet balance for the $'
+                    .number_format($terminationFeeUsd, 2)
+                    .' termination fee (₦'
+                    .number_format($feeChargeNgn, 2)
+                    .' required). Please fund your Naira wallet and try again.';
+        }
 
         return [
             'card_id' => (int) $card->id,
@@ -2056,11 +2078,10 @@ class VirtualCardService
             'refund_currency' => 'NGN',
             'can_terminate' => $canTerminate,
             'minimum_balance_usd' => $terminationFeeUsd,
-            'refund_via' => $this->isVisa493BinCard($card)
-                ? ($refundableUsd >= 0.01 ? 'withdraw_webhook' : 'terminate_only')
-                : 'immediate',
+            'fee_charge_ngn' => $feeChargeNgn,
+            'refund_via' => $refundVia,
             'exchange_rate_source' => $withdrawRateQuote['source'] ?? 'terminate_sell',
-            'block_reason' => null,
+            'block_reason' => $blockReason,
         ];
     }
 
@@ -2265,7 +2286,9 @@ class VirtualCardService
         $user = User::findOrFail($userId);
         $refundableUsd = (float) ($quote['refundable_usd'] ?? 0);
         $terminationFeeUsd = (float) ($quote['termination_fee_usd'] ?? 1.0);
+        $balanceUsd = (float) ($quote['card_balance_usd'] ?? 0);
         $withdrawalTransaction = null;
+        $feeTransaction = null;
 
         if ($refundableUsd >= 0.01) {
             $withdrawResult = $this->visa493Withdrawal->initiateForTermination($userId, (int) $card->id, $refundableUsd);
@@ -2289,7 +2312,7 @@ class VirtualCardService
         }
 
         try {
-            DB::transaction(function () use ($userId, $card, $quote, $response, $terminationFeeUsd, $refundableUsd, $withdrawalTransaction) {
+            DB::transaction(function () use ($userId, $card, $quote, $response, $terminationFeeUsd, $refundableUsd, $balanceUsd, $withdrawalTransaction, &$feeTransaction) {
                 $lockedCard = VirtualCard::where('id', $card->id)
                     ->where('user_id', $userId)
                     ->lockForUpdate()
@@ -2297,6 +2320,54 @@ class VirtualCardService
 
                 if (! $lockedCard || ! $lockedCard->is_active) {
                     throw new \RuntimeException('Card is no longer active.');
+                }
+
+                if ($balanceUsd < 0.01) {
+                    $feeChargeNgn = round((float) ($quote['fee_charge_ngn'] ?? 0), 2);
+                    if ($feeChargeNgn <= 0) {
+                        throw new \RuntimeException('Termination fee quote is invalid.');
+                    }
+
+                    $wallet = FiatWallet::where('user_id', $userId)
+                        ->where('currency', 'NGN')
+                        ->where('country_code', 'NG')
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (! $wallet) {
+                        $wallet = $this->walletService->getFiatWallet($userId, 'NGN', 'NG');
+                        $wallet = FiatWallet::where('id', $wallet->id)->lockForUpdate()->first();
+                    }
+
+                    if (! $wallet || (float) $wallet->balance + 0.0001 < $feeChargeNgn) {
+                        throw new \RuntimeException('Insufficient Naira wallet balance for the termination fee.');
+                    }
+
+                    $wallet->decrement('balance', $feeChargeNgn);
+
+                    $feeTransaction = Transaction::create([
+                        'user_id' => $userId,
+                        'transaction_id' => Transaction::generateTransactionId(),
+                        'type' => 'card_termination_fee',
+                        'category' => 'virtual_card',
+                        'status' => 'completed',
+                        'currency' => 'NGN',
+                        'amount' => $feeChargeNgn,
+                        'fee' => 0,
+                        'total_amount' => $feeChargeNgn,
+                        'reference' => 'TRF'.strtoupper(substr(md5(uniqid((string) $userId, true)), 0, 12)),
+                        'description' => 'Virtual card termination fee: $'.number_format($terminationFeeUsd, 2).' USD',
+                        'metadata' => [
+                            'virtual_card_id' => $lockedCard->id,
+                            'provider_card_id' => $lockedCard->provider_card_id,
+                            'termination_fee_usd' => $terminationFeeUsd,
+                            'fee_charge_ngn' => $feeChargeNgn,
+                            'sell_rate_ngn_per_usd' => (float) ($quote['sell_rate_ngn_per_usd'] ?? 0),
+                            'payment_wallet_type' => 'naira_wallet',
+                            'card_scheme' => 'visa',
+                            'pagocards_visa_api' => self::PAGOCARDS_VISA_API_493,
+                        ],
+                    ]);
                 }
 
                 VirtualCardTransaction::create([
@@ -2318,8 +2389,9 @@ class VirtualCardService
                     'metadata' => [
                         'termination_quote' => $quote,
                         'refund_ngn' => (float) ($quote['refund_ngn'] ?? 0),
-                        'refund_via' => 'withdraw_webhook',
+                        'refund_via' => $balanceUsd < 0.01 ? 'naira_wallet_fee' : 'withdraw_webhook',
                         'withdrawal_transaction_id' => $withdrawalTransaction?->id,
+                        'termination_fee_transaction_id' => $feeTransaction?->id,
                     ],
                     'provider_payload' => $response,
                 ]);
@@ -2348,7 +2420,9 @@ class VirtualCardService
         $freshCard = VirtualCard::where('id', $card->id)->where('user_id', $userId)->first();
         $message = $refundableUsd >= 0.01
             ? 'Your card has been terminated. The refundable balance will be credited to your Naira wallet after provider confirmation.'
-            : ($response['message'] ?? 'Card terminated successfully');
+            : ($balanceUsd < 0.01
+                ? 'Your card has been terminated. The termination fee was charged from your Naira wallet.'
+                : ($response['message'] ?? 'Card terminated successfully'));
 
         return [
             'success' => true,
@@ -2357,6 +2431,7 @@ class VirtualCardService
                 'card' => $freshCard,
                 'termination' => $quote,
                 'withdrawal_transaction' => $withdrawalTransaction,
+                'termination_fee_transaction' => $feeTransaction,
                 'provider_response' => $response,
             ],
         ];
