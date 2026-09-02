@@ -1798,7 +1798,7 @@ class VirtualCardService
             : null;
         $rateForRefund = $withdrawRateQuote !== null ? $withdrawRateQuote['rate'] : $sellRate;
         $refundNgn = round($refundableUsd * $rateForRefund, 2);
-        $canTerminate = $balanceUsd + 0.0001 >= $terminationFeeUsd;
+        $canTerminate = $balanceUsd < 0.01 || $balanceUsd + 0.0001 >= $terminationFeeUsd;
 
         return [
             'card_id' => (int) $card->id,
@@ -1811,7 +1811,9 @@ class VirtualCardService
             'refund_currency' => 'NGN',
             'can_terminate' => $canTerminate,
             'minimum_balance_usd' => $terminationFeeUsd,
-            'refund_via' => $this->isVisa493BinCard($card) ? 'withdraw_webhook' : 'immediate',
+            'refund_via' => $this->isVisa493BinCard($card)
+                ? ($refundableUsd >= 0.01 ? 'withdraw_webhook' : 'terminate_only')
+                : 'immediate',
             'exchange_rate_source' => $withdrawRateQuote['source'] ?? 'terminate_sell',
             'block_reason' => null,
         ];
