@@ -44,6 +44,9 @@ class PagocardsVirtualCardWebhookService
 
     public const EVENT_TRANSACTION_FEE = 'virtualcard.transaction.fee';
 
+    /** 493 BIN app-initiated card unload result (`eventType` on v1 cards webhooks). */
+    public const EVENT_CARD_WITHDRAW_RESULT = 'cardWithdrawResult';
+
     public const EVENT_CASH_WITHDRAWAL = 'virtualcard.transaction.cash_withdrawal';
 
     public const EVENT_CARD_APPLICATION = 'virtualcard.transaction.card_application';
@@ -73,6 +76,7 @@ class PagocardsVirtualCardWebhookService
         self::EVENT_CASH_WITHDRAWAL,
         self::EVENT_CARD_APPLICATION,
         self::EVENT_CANCELLATION,
+        self::EVENT_CARD_WITHDRAW_RESULT,
         self::LEGACY_AUTHORIZATION_CONFIRMED,
         self::LEGACY_AUTHORIZATION_REJECTED,
     ];
@@ -230,6 +234,29 @@ class PagocardsVirtualCardWebhookService
     private function parseIncomingWebhook(array $payload): array
     {
         $eventType = strtolower(trim((string) ($payload['eventType'] ?? '')));
+        if ($eventType === strtolower(self::EVENT_CARD_WITHDRAW_RESULT)) {
+            $cardId = trim((string) ($payload['cardid'] ?? $payload['cardId'] ?? ''));
+            $eventId = trim((string) ($payload['eventId'] ?? $payload['orderId'] ?? ''));
+            if ($eventId === '') {
+                $eventId = 'card-withdraw-'.hash('sha256', json_encode($payload) ?: uniqid('', true));
+            }
+
+            $normalized = array_merge($payload, [
+                'eventName' => self::EVENT_CARD_WITHDRAW_RESULT,
+                'eventId' => $eventId,
+                'cardId' => $cardId,
+                'pagocards_visa_api' => 'v1_493',
+            ]);
+
+            return [
+                'event_name' => self::EVENT_CARD_WITHDRAW_RESULT,
+                'event_id' => $eventId,
+                'card_id' => $cardId,
+                'event_data' => $normalized,
+                'stored_payload' => $normalized,
+            ];
+        }
+
         if ($eventType === self::EVENT_3DS_493) {
             $cardId = trim((string) ($payload['cardid'] ?? $payload['cardId'] ?? ''));
             $authId = trim((string) ($payload['authId'] ?? ''));
@@ -593,6 +620,7 @@ class PagocardsVirtualCardWebhookService
             self::EVENT_TRANSACTION_FEE,
             self::EVENT_CASH_WITHDRAWAL,
             self::EVENT_CANCELLATION,
+            self::EVENT_CARD_WITHDRAW_RESULT,
             self::LEGACY_AUTHORIZATION_CONFIRMED,
         ], true);
     }

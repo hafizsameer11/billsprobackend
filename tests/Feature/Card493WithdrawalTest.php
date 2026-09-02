@@ -233,6 +233,138 @@ class Card493WithdrawalTest extends TestCase
         $this->assertEquals(16000.0, (float) $wallet->balance);
     }
 
+    public function test_withdraw_504_keeps_pending_and_returns_processing_message(): void
+    {
+        Http::fake([
+            'https://pagocards.test/api/v1/cards/card_01withdraw493' => Http::response([
+                'status' => 'success',
+                'data' => ['card_id' => 'card_01withdraw493', 'balance' => ['display_amount' => 25]],
+            ], 200),
+            'https://pagocards.test/api/v1/cards/card_01withdraw493/withdraw' => Http::response([
+                'status' => 'error',
+                'message' => 'Failed to withdraw card funds',
+            ], 504),
+        ]);
+
+        $user = User::factory()->create();
+        $card = $this->make493VisaCard($user);
+        $this->seedFundingRate($user, $card, 1500.0);
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/virtual-cards/visa-493/{$card->id}/withdraw", ['amount' => 10]);
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonFragment([
+                'message' => 'Your withdrawal request is being processed. Your Naira wallet will be credited once the provider confirms the transaction.',
+            ]);
+
+        $this->assertDatabaseHas('transactions', [
+            'user_id' => $user->id,
+            'type' => 'card_withdrawal',
+            'status' => 'pending',
+        ]);
+    }
+
+    public function test_card_withdraw_result_webhook_settles_pending_withdrawal(): void
+    {
+        $user = User::factory()->create();
+        FiatWallet::query()->create([
+            'user_id' => $user->id,
+            'currency' => 'NGN',
+            'country_code' => 'NG',
+            'balance' => 1000,
+            'locked_balance' => 0,
+            'is_active' => true,
+        ]);
+        $card = $this->make493VisaCard($user, 5);
+
+        $pending = Transaction::query()->create([
+            'user_id' => $user->id,
+            'transaction_id' => Transaction::generateTransactionId(),
+            'type' => 'card_withdrawal',
+            'category' => 'virtual_card',
+            'status' => 'pending',
+            'currency' => 'USD',
+            'amount' => 5,
+            'fee' => 0,
+            'total_amount' => 5,
+            'reference' => 'WDA2B011BA1B17',
+            'description' => 'Pending withdraw',
+            'metadata' => [
+                'virtual_card_id' => $card->id,
+                'withdrawal_usd' => 5,
+                'exchange_rate_ngn_per_usd' => 1449,
+                'expected_refund_ngn' => 7245,
+                'settlement_status' => 'awaiting_webhook',
+            ],
+        ]);
+
+        $this->postJson($this->webhookUrl(), [
+            'eventType' => PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT,
+            'status' => 'SUCCESS',
+            'withdrawAmount' => '5.00',
+            'cardNo' => '4937********1633',
+            'cardid' => 'card_01withdraw493',
+            'orderId' => 'WD202609020018598206335',
+        ])->assertOk();
+
+        $pending->refresh();
+        $this->assertSame('completed', $pending->status);
+
+        $wallet = FiatWallet::where('user_id', $user->id)->first();
+        $this->assertEquals(8245.0, (float) $wallet->balance);
+    }
+
+    public function test_card_withdraw_result_recovers_failed_withdrawal(): void
+    {
+        $user = User::factory()->create();
+        FiatWallet::query()->create([
+            'user_id' => $user->id,
+            'currency' => 'NGN',
+            'country_code' => 'NG',
+            'balance' => 1000,
+            'locked_balance' => 0,
+            'is_active' => true,
+        ]);
+        $card = $this->make493VisaCard($user, 0);
+
+        $failed = Transaction::query()->create([
+            'user_id' => $user->id,
+            'transaction_id' => Transaction::generateTransactionId(),
+            'type' => 'card_withdrawal',
+            'category' => 'virtual_card',
+            'status' => 'failed',
+            'currency' => 'USD',
+            'amount' => 5,
+            'fee' => 0,
+            'total_amount' => 5,
+            'reference' => 'WDA2B011BA1B17',
+            'description' => 'Virtual card withdrawal failed at provider',
+            'metadata' => [
+                'virtual_card_id' => $card->id,
+                'withdrawal_usd' => 5,
+                'exchange_rate_ngn_per_usd' => 1449,
+                'expected_refund_ngn' => 7245,
+                'settlement_status' => 'provider_failed',
+            ],
+        ]);
+
+        $this->postJson($this->webhookUrl(), [
+            'eventType' => PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT,
+            'status' => 'SUCCESS',
+            'withdrawAmount' => '5.00',
+            'cardid' => 'card_01withdraw493',
+            'orderId' => 'WD202609020018598206335',
+        ])->assertOk();
+
+        $failed->refresh();
+        $this->assertSame('completed', $failed->status);
+
+        $wallet = FiatWallet::where('user_id', $user->id)->first();
+        $this->assertEquals(8245.0, (float) $wallet->balance);
+    }
+
     public function test_terminate_493_withdraws_balance_before_provider_terminate(): void
     {
         Http::fake([

@@ -138,7 +138,18 @@ class VirtualCard493WithdrawalService
             return;
         }
 
-        $pending = $this->findOldestPendingWithdrawal((int) $card->id, (int) $card->user_id);
+        if ($eventName === PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT) {
+            $this->handleCardWithdrawResultWebhook($card, $eventData, $externalEventId);
+
+            return;
+        }
+
+        $eventUsd = $this->resolveWebhookUsdAmount($eventName, $eventData);
+        $pending = $this->findWithdrawalAwaitingWebhookSettlement(
+            (int) $card->id,
+            (int) $card->user_id,
+            $eventUsd > 0 ? $eventUsd : null
+        );
         if (! $pending) {
             return;
         }
@@ -152,7 +163,6 @@ class VirtualCard493WithdrawalService
             return;
         }
 
-        $eventUsd = $this->resolveWebhookUsdAmount($eventName, $eventData);
         if ($eventUsd > 0 && abs($eventUsd - $expectedUsd) > 0.05) {
             return;
         }
@@ -161,6 +171,7 @@ class VirtualCard493WithdrawalService
             $eventData['id']
             ?? $eventData['eventTargetId']
             ?? $eventData['reference']
+            ?? $eventData['orderId']
             ?? $externalEventId
         ));
 
@@ -178,6 +189,52 @@ class VirtualCard493WithdrawalService
                 'pending_transaction_id' => $pending->id,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    protected function handleCardWithdrawResultWebhook(VirtualCard $card, array $eventData, string $externalEventId): void
+    {
+        $status = strtoupper(trim((string) ($eventData['status'] ?? '')));
+        $eventUsd = $this->resolveWebhookUsdAmount(PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT, $eventData);
+        $withdrawal = $this->findWithdrawalAwaitingWebhookSettlement(
+            (int) $card->id,
+            (int) $card->user_id,
+            $eventUsd > 0 ? $eventUsd : null
+        );
+
+        if (! $withdrawal) {
+            return;
+        }
+
+        if ($status === 'SUCCESS') {
+            $providerTxId = trim((string) (
+                $eventData['orderId']
+                ?? $eventData['id']
+                ?? $eventData['eventTargetId']
+                ?? $externalEventId
+            ));
+
+            try {
+                $this->completePendingWithdrawal($withdrawal, $providerTxId !== '' ? $providerTxId : $externalEventId, [
+                    'source' => 'pagocards_webhook',
+                    'provider_event' => PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT,
+                    'provider_event_id' => $externalEventId,
+                    'provider_payload' => $eventData,
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('virtual_card.withdraw_webhook_settlement_failed', [
+                    'virtual_card_id' => $card->id,
+                    'user_id' => $card->user_id,
+                    'pending_transaction_id' => $withdrawal->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            return;
+        }
+
+        if (in_array($status, ['FAILED', 'FAILURE', 'ERROR'], true)) {
+            $this->finalizeWithdrawalFailure($withdrawal, $eventData);
         }
     }
 
@@ -291,15 +348,36 @@ class VirtualCard493WithdrawalService
                 'amount' => $amountUsd,
             ]);
         } catch (MastercardApiException $exception) {
-            $pending->update([
-                'status' => 'failed',
-                'description' => 'Virtual card withdrawal failed at provider',
-                'metadata' => array_merge(is_array($pending->metadata) ? $pending->metadata : [], [
-                    'settlement_status' => 'provider_failed',
-                    'provider_error' => $exception->getMessage(),
-                ]),
+            if ($this->providerWithdrawMayCompleteAsynchronously($exception)) {
+                $pending->update([
+                    'metadata' => array_merge(is_array($pending->metadata) ? $pending->metadata : [], [
+                        'settlement_status' => 'awaiting_webhook',
+                        'provider_api_uncertain' => true,
+                        'provider_error' => $exception->getMessage(),
+                        'provider_http_status' => $exception->getHttpStatus(),
+                    ]),
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Your withdrawal request is being processed. Your Naira wallet will be credited once the provider confirms the transaction.',
+                    'data' => [
+                        'card' => $card->fresh(),
+                        'withdrawal' => $quote,
+                        'transaction' => $pending->fresh(),
+                        'provider_response' => [
+                            'uncertain' => true,
+                            'error' => $exception->getMessage(),
+                            'http_status' => $exception->getHttpStatus(),
+                        ],
+                    ],
+                ];
+            }
+
+            $this->finalizeWithdrawalFailure($pending, [
+                'provider_error' => $exception->getMessage(),
+                'provider_http_status' => $exception->getHttpStatus(),
             ]);
-            VirtualCardTransaction::where('transaction_id', $pending->id)->update(['status' => 'failed']);
 
             return [
                 'success' => false,
@@ -347,17 +425,20 @@ class VirtualCard493WithdrawalService
 
     protected function completePendingWithdrawal(Transaction $pending, string $providerTransactionId, array $context): void
     {
-        if ($pending->status !== 'pending') {
+        if (! in_array($pending->status, ['pending', 'failed'], true)) {
             return;
         }
 
         DB::transaction(function () use ($pending, $providerTransactionId, $context) {
             $locked = Transaction::where('id', $pending->id)->lockForUpdate()->first();
-            if (! $locked || $locked->status !== 'pending') {
+            if (! $locked || ! in_array($locked->status, ['pending', 'failed'], true)) {
                 return;
             }
 
             $meta = is_array($locked->metadata) ? $locked->metadata : [];
+            if (($meta['settlement_status'] ?? null) === 'completed') {
+                return;
+            }
             $refundNgn = round((float) ($meta['expected_refund_ngn'] ?? 0), 2);
             $withdrawalUsd = (float) ($meta['withdrawal_usd'] ?? 0);
             $exchangeRate = (float) ($meta['exchange_rate_ngn_per_usd'] ?? 0);
@@ -431,6 +512,54 @@ class VirtualCard493WithdrawalService
             ->first();
     }
 
+    protected function findWithdrawalAwaitingWebhookSettlement(int $virtualCardId, int $userId, ?float $amountUsd = null): ?Transaction
+    {
+        $query = Transaction::query()
+            ->where('user_id', $userId)
+            ->where('type', 'card_withdrawal')
+            ->where('metadata->virtual_card_id', $virtualCardId)
+            ->where('created_at', '>=', now()->subHours(48))
+            ->where(function ($builder) {
+                $builder->where('status', 'pending')
+                    ->orWhere(function ($failed) {
+                        $failed->where('status', 'failed')
+                            ->where('metadata->settlement_status', 'provider_failed');
+                    });
+            })
+            ->orderBy('created_at');
+
+        if ($amountUsd !== null && $amountUsd > 0) {
+            $query->where('amount', $amountUsd);
+        }
+
+        return $query->first();
+    }
+
+    protected function finalizeWithdrawalFailure(Transaction $pending, array $context): void
+    {
+        if (! in_array($pending->status, ['pending', 'failed'], true)) {
+            return;
+        }
+
+        $pending->update([
+            'status' => 'failed',
+            'description' => 'Virtual card withdrawal failed at provider',
+            'metadata' => array_merge(is_array($pending->metadata) ? $pending->metadata : [], [
+                'settlement_status' => 'provider_failed',
+                'provider_failure_context' => $context,
+            ]),
+        ]);
+
+        VirtualCardTransaction::where('transaction_id', $pending->id)->update(['status' => 'failed']);
+    }
+
+    protected function providerWithdrawMayCompleteAsynchronously(MastercardApiException $exception): bool
+    {
+        $status = $exception->getHttpStatus();
+
+        return in_array($status, [408, 502, 503, 504], true) || $status >= 500;
+    }
+
     protected function visaFundExchangeRateNgnPerUsd(): float
     {
         $r = $this->platformRates->findVirtualCard(VirtualCardService::PLATFORM_VISA_FUND);
@@ -470,6 +599,10 @@ class VirtualCard493WithdrawalService
 
     protected function webhookLooksLikeAppUnload(string $eventName, array $eventData, float $expectedUsd): bool
     {
+        if ($eventName === PagocardsVirtualCardWebhookService::EVENT_CARD_WITHDRAW_RESULT) {
+            return strtoupper(trim((string) ($eventData['status'] ?? ''))) === 'SUCCESS';
+        }
+
         $type = strtolower((string) ($eventData['transaction_type'] ?? $eventData['type'] ?? ''));
         $narrative = strtolower((string) ($eventData['narrative'] ?? $eventData['description'] ?? ''));
 
@@ -496,6 +629,10 @@ class VirtualCard493WithdrawalService
 
     protected function resolveWebhookUsdAmount(string $eventName, array $eventData): float
     {
+        if (isset($eventData['withdrawAmount']) && is_numeric($eventData['withdrawAmount'])) {
+            return abs((float) $eventData['withdrawAmount']);
+        }
+
         if (array_key_exists('display_amount', $eventData) && is_numeric($eventData['display_amount'])) {
             return abs((float) $eventData['display_amount']);
         }
