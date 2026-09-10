@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Kyc;
 use App\Models\User;
 use App\Services\CheckMyNinBvn\CheckMyNinBvnClient;
+use App\Services\Referral\ReferralRewardService;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
@@ -12,6 +13,9 @@ use Illuminate\Support\Facades\Storage;
 
 class KycService
 {
+    public function __construct(
+        protected ReferralRewardService $referralRewards,
+    ) {}
     /**
      * Submit or update KYC information
      */
@@ -328,6 +332,11 @@ class KycService
 
         if ($status === 'approved') {
             $kyc->user->update(['kyc_completed' => true]);
+            try {
+                $this->referralRewards->awardForAction($kyc->user->fresh(), 'kyc_approved', 0.0, null);
+            } catch (\Throwable $e) {
+                Log::warning('referral.kyc_hook_failed', ['message' => $e->getMessage()]);
+            }
         } else {
             $kyc->user->update(['kyc_completed' => false]);
         }

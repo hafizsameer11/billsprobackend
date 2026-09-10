@@ -5,6 +5,7 @@ namespace App\Services\PalmPay;
 use App\Helpers\MoneyFormatHelper;
 use App\Helpers\NotificationHelper;
 use App\Services\Admin\TransactionPricingSnapshotService;
+use App\Services\Referral\ReferralRewardService;
 use App\Services\VirtualCard\DeclineFeeRecoveryService;
 use App\Models\Deposit;
 use App\Models\FiatWallet;
@@ -13,6 +14,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -22,6 +24,7 @@ class PalmPayDepositService
         protected PalmPayCheckoutService $checkout,
         protected TransactionPricingSnapshotService $pricingSnapshots,
         protected DeclineFeeRecoveryService $declineFeeRecovery,
+        protected ReferralRewardService $referralRewards,
     ) {}
 
     /**
@@ -282,6 +285,19 @@ class PalmPayDepositService
                         'provider' => 'palmpay',
                     ]
                 );
+
+                if (strtoupper($currency) === 'NGN') {
+                    try {
+                        $this->referralRewards->awardForAction(
+                            $user,
+                            'first_deposit',
+                            (float) $creditAmount,
+                            (int) $transaction->id
+                        );
+                    } catch (\Throwable $e) {
+                        Log::warning('referral.deposit_hook_failed', ['message' => $e->getMessage()]);
+                    }
+                }
             }
         }, 5);
     }

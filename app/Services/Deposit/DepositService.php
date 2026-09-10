@@ -9,16 +9,18 @@ use App\Models\Deposit;
 use App\Models\FiatWallet;
 use App\Models\Transaction;
 use App\Models\User;
-use App\Services\Deposit\DepositService;
 use App\Services\Platform\PlatformRateResolver;
+use App\Services\Referral\ReferralRewardService;
 use App\Services\VirtualCard\DeclineFeeRecoveryService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class DepositService
 {
     public function __construct(
         protected PlatformRateResolver $platformRates,
         protected DeclineFeeRecoveryService $declineFeeRecovery,
+        protected ReferralRewardService $referralRewards,
     ) {}
 
     /**
@@ -178,6 +180,19 @@ class DepositService
                         'transaction_id' => $transaction->transaction_id,
                     ]
                 );
+
+                if (strtoupper((string) $deposit->currency) === 'NGN') {
+                    try {
+                        $this->referralRewards->awardForAction(
+                            $user,
+                            'first_deposit',
+                            (float) $deposit->amount,
+                            (int) $transaction->id
+                        );
+                    } catch (\Throwable $e) {
+                        Log::warning('referral.manual_deposit_hook_failed', ['message' => $e->getMessage()]);
+                    }
+                }
             }
 
             return [

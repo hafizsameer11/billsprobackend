@@ -28,6 +28,7 @@ class RegisterRequest extends FormRequest
             'phone_number' => 'nullable|string|unique:users,phone_number',
             'password' => 'required|string|min:8',
             'country_code' => 'nullable|string|max:10',
+            'referral_code' => 'nullable|string|max:32',
         ];
     }
 
@@ -47,6 +48,7 @@ class RegisterRequest extends FormRequest
             'phone_number.unique' => 'This phone number is already registered.',
             'password.required' => 'Password is required.',
             'password.min' => 'Password must be at least 8 characters.',
+            'referral_code.max' => 'Referral code is too long.',
         ];
     }
 }

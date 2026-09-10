@@ -14,6 +14,7 @@ use App\Services\Crypto\CryptoWalletService;
 use App\Services\Admin\CardLoadProfitCalculator;
 use App\Services\Platform\PlatformRateResolver;
 use App\Services\Platform\ServiceMaintenanceService;
+use App\Services\Referral\ReferralRewardService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +50,7 @@ class VirtualCardService
         protected ServiceMaintenanceService $maintenance,
         protected CardLoadProfitCalculator $cardLoadProfit,
         protected VirtualCard493WithdrawalService $visa493Withdrawal,
+        protected ReferralRewardService $referralRewards,
     ) {}
 
     /**
@@ -324,6 +326,8 @@ class VirtualCardService
                     'provider_response' => $this->sanitizeProviderPayloadForLog($response),
                 ]);
 
+                $this->queueReferralCardCreateReward($userId, $paymentWalletType === 'naira_wallet' ? $feeNgn : 0.0, (int) $transaction->id);
+
                 return [
                     'success' => true,
                     'message' => $response['message'] ?? 'Virtual card created successfully',
@@ -561,6 +565,8 @@ class VirtualCardService
                     'provider_message' => $response['message'] ?? null,
                     'provider_response' => $this->sanitizeProviderPayloadForLog($response),
                 ]);
+
+                $this->queueReferralCardCreateReward($userId, $paymentWalletType === 'naira_wallet' ? $feeNgn : 0.0, (int) $transaction->id);
 
                 return [
                     'success' => true,
@@ -828,6 +834,8 @@ class VirtualCardService
                     'provider_message' => $response['message'] ?? null,
                     'provider_response' => $this->sanitizeProviderPayloadForLog($response),
                 ]);
+
+                $this->queueReferralCardCreateReward($userId, $paymentWalletType === 'naira_wallet' ? $feeNgn : 0.0, (int) $transaction->id);
 
                 return [
                     'success' => true,
@@ -1582,6 +1590,10 @@ class VirtualCardService
                 if ($refreshed && isset($result['data']) && is_array($result['data'])) {
                     $result['data']['card'] = $refreshed;
                 }
+
+                $basisNgn = (float) ($charges['charge_ngn'] ?? 0);
+                $txId = isset($result['data']['transaction']) ? (int) $result['data']['transaction']->id : null;
+                $this->queueReferralCardFundReward($userId, $basisNgn, $txId);
             }
 
             return $result;
@@ -3546,6 +3558,32 @@ class VirtualCardService
     /**
      * @param  array<string, mixed>  $charges
      */
+    protected function queueReferralCardCreateReward(int $userId, float $feeNgn, ?int $transactionId): void
+    {
+        DB::afterCommit(function () use ($userId, $feeNgn, $transactionId) {
+            try {
+                $user = User::query()->find($userId);
+                if ($user) {
+                    $this->referralRewards->awardForAction($user, 'card_create', $feeNgn, $transactionId);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('referral.card_create_hook_failed', ['message' => $e->getMessage()]);
+            }
+        });
+    }
+
+    protected function queueReferralCardFundReward(int $userId, float $basisNgn, ?int $transactionId): void
+    {
+        try {
+            $user = User::query()->find($userId);
+            if ($user) {
+                $this->referralRewards->awardForAction($user, 'card_fund', $basisNgn, $transactionId);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('referral.card_fund_hook_failed', ['message' => $e->getMessage()]);
+        }
+    }
+
     protected function debitCardWalletCharge(
         int $userId,
         string $paymentWalletType,

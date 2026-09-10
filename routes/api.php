@@ -29,6 +29,7 @@ use App\Http\Controllers\Api\AdminWalletUsersController;
 use App\Http\Controllers\Api\AdminWebhookController;
 use App\Http\Controllers\Api\AdminWithdrawalController;
 use App\Http\Controllers\Api\AdminLegalDocumentController;
+use App\Http\Controllers\Api\AdminReferralController;
 use App\Http\Controllers\Api\AppVersionController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\LegalDocumentController;
@@ -53,6 +54,7 @@ use App\Http\Controllers\Api\VirtualCardController;
 use App\Http\Controllers\Api\Visa493VirtualCardController;
 use App\Http\Controllers\Api\VisaVirtualCardController;
 use App\Http\Controllers\Api\WalletController;
+use App\Http\Controllers\Api\ReferralController;
 use App\Http\Controllers\Api\WithdrawalController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -126,6 +128,14 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/balance', [WalletController::class, 'getBalance']);
         Route::get('/fiat', [WalletController::class, 'getFiatWallets']);
         Route::get('/crypto', [WalletController::class, 'getCryptoWallets']);
+    });
+
+    // ========================================================================
+    // REFERRAL ROUTES
+    // ========================================================================
+    Route::prefix('referral')->group(function () {
+        Route::get('/', [ReferralController::class, 'show']);
+        Route::post('/transfer-to-wallet', [ReferralController::class, 'transferToWallet']);
     });
 
     // ========================================================================
@@ -297,6 +307,13 @@ Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::get('/kyc/{user}/face-video', [AdminKycController::class, 'faceVideo']);
         Route::post('/kyc/{user}/approve', [AdminKycController::class, 'approve']);
         Route::post('/kyc/{user}/reject', [AdminKycController::class, 'reject']);
+
+        Route::get('/referral/settings', [AdminReferralController::class, 'settings']);
+        Route::put('/referral/settings', [AdminReferralController::class, 'updateSettings']);
+        Route::get('/referral/relationships', [AdminReferralController::class, 'relationships']);
+        Route::patch('/referral/relationships/{id}', [AdminReferralController::class, 'updateRelationship']);
+        Route::patch('/referral/users/{id}', [AdminReferralController::class, 'updateUser']);
+        Route::post('/referral/rewards/manual', [AdminReferralController::class, 'manualReward']);
 
         Route::get('/bill-payments/summary', [AdminBillPaymentController::class, 'summary']);
         Route::get('/bill-payments', [AdminBillPaymentController::class, 'index']);

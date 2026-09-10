@@ -6,6 +6,7 @@ use App\Helpers\NotificationHelper;
 use App\Jobs\ProvisionUserCryptoDepositAddressesJob;
 use App\Models\User;
 use App\Services\Crypto\CryptoWalletService;
+use App\Services\Referral\ReferralService;
 use App\Services\Wallet\WalletService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -19,14 +20,18 @@ class AuthService
 
     protected CryptoWalletService $cryptoWalletService;
 
+    protected ReferralService $referralService;
+
     public function __construct(
         OtpService $otpService,
         WalletService $walletService,
-        CryptoWalletService $cryptoWalletService
+        CryptoWalletService $cryptoWalletService,
+        ReferralService $referralService
     ) {
         $this->otpService = $otpService;
         $this->walletService = $walletService;
         $this->cryptoWalletService = $cryptoWalletService;
+        $this->referralService = $referralService;
     }
 
     /**
@@ -49,6 +54,14 @@ class AuthService
             ];
         }
 
+        $referrerResolve = $this->referralService->resolveReferrerForRegistration($data['referral_code'] ?? null);
+        if (! ($referrerResolve['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $referrerResolve['message'] ?? 'Invalid referral code.',
+            ];
+        }
+
         // Create user
         $user = User::create([
             'name' => trim(($data['first_name'] ?? '').' '.($data['last_name'] ?? '')),
@@ -61,7 +74,17 @@ class AuthService
             'email_verified' => false,
             'phone_verified' => false,
             'kyc_completed' => false,
+            'referred_by_user_id' => $referrerResolve['referrer_id'] ?? null,
         ]);
+
+        // Assign own referral code eagerly so they can share immediately after verify
+        try {
+            $this->referralService->ensureReferralCode($user);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to generate referral code at register: '.$e->getMessage(), [
+                'user_id' => $user->id,
+            ]);
+        }
 
         // Send OTP to email
         $otpResult = $this->otpService->sendOtp($user->email, null, 'email');
@@ -127,6 +150,8 @@ class AuthService
                 ProvisionUserCryptoDepositAddressesJob::dispatch($user->id);
             });
         });
+
+        $this->referralService->finalizeReferralAfterEmailVerify($user->fresh());
 
         // Generate authentication token for the user
         $token = $user->createToken('auth-token')->plainTextToken;

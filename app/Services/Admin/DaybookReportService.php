@@ -15,7 +15,7 @@ use Illuminate\Support\Carbon;
 class DaybookReportService
 {
     /** Naira types that add money to a user wallet (credit side uses `amount`). */
-    private const CREDIT_TYPES = ['deposit', 'card_refund', 'refund', 'reversal', 'bonus', 'cashback', 'admin_credit'];
+        private const CREDIT_TYPES = ['deposit', 'card_refund', 'refund', 'reversal', 'bonus', 'cashback', 'admin_credit', 'referral_payout'];
 
     /** Naira types that take money out of a user wallet (debit side uses `total_amount`). */
     private const DEBIT_TYPES = ['withdrawal', 'bill_payment', 'card_creation', 'card_funding', 'card_decline_fee', 'admin_debit'];
@@ -682,6 +682,7 @@ class DaybookReportService
             'refund' => 'Refund',
             'bonus' => 'Bonus',
             'cashback' => 'Cashback',
+            'referral_payout' => 'Referral payout',
             'flush' => 'Treasury flush',
         ];
 

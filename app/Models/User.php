@@ -30,6 +30,8 @@ class User extends Authenticatable
         'phone_verified',
         'kyc_completed',
         'country_code',
+        'referral_code',
+        'referred_by_user_id',
         'suspended_at',
         'suspension_reason',
         'internal_notes',
@@ -167,5 +169,20 @@ class User extends Authenticatable
     public function expoPushTokens()
     {
         return $this->hasMany(UserExpoPushToken::class);
+    }
+
+    public function referredBy()
+    {
+        return $this->belongsTo(User::class, 'referred_by_user_id');
+    }
+
+    public function referrals()
+    {
+        return $this->hasMany(User::class, 'referred_by_user_id');
+    }
+
+    public function referralEarningsWallet()
+    {
+        return $this->hasOne(ReferralEarningsWallet::class);
     }
 }
