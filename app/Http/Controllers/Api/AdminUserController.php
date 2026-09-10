@@ -39,6 +39,14 @@ class AdminUserController extends Controller
     public function show(User $user): JsonResponse
     {
         $user->makeVisible(['internal_notes']);
+        if (! is_string($user->referral_code) || $user->referral_code === '') {
+            try {
+                app(\App\Services\Referral\ReferralService::class)->ensureReferralCode($user);
+                $user->refresh();
+            } catch (\Throwable) {
+                // ignore — code can still be set manually
+            }
+        }
 
         return ResponseHelper::success($user, 'User retrieved.');
     }
@@ -48,6 +56,7 @@ class AdminUserController extends Controller
         $data = $request->validate([
             'internal_notes' => 'nullable|string|max:65000',
             'suspension_reason' => 'nullable|string|max:2000',
+            'referral_code' => 'nullable|string|max:32|regex:/^[A-Za-z0-9_-]+$/',
         ]);
 
         if (array_key_exists('internal_notes', $data)) {
@@ -55,6 +64,21 @@ class AdminUserController extends Controller
         }
         if (array_key_exists('suspension_reason', $data)) {
             $user->update(['suspension_reason' => $data['suspension_reason']]);
+        }
+        if (array_key_exists('referral_code', $data)) {
+            $code = $data['referral_code'] !== null && $data['referral_code'] !== ''
+                ? strtoupper(trim((string) $data['referral_code']))
+                : null;
+            if ($code !== null) {
+                $taken = User::query()
+                    ->whereRaw('UPPER(referral_code) = ?', [$code])
+                    ->where('id', '!=', $user->id)
+                    ->exists();
+                if ($taken) {
+                    return ResponseHelper::error('Referral code already in use.', 422);
+                }
+            }
+            $user->update(['referral_code' => $code]);
         }
 
         $user->refresh();

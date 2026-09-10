@@ -26,7 +26,10 @@ class AdminUserService
             $q->where(function ($w) use ($s) {
                 $w->where('email', 'like', $s)
                     ->orWhere('name', 'like', $s)
-                    ->orWhere('phone_number', 'like', $s);
+                    ->orWhere('first_name', 'like', $s)
+                    ->orWhere('last_name', 'like', $s)
+                    ->orWhere('phone_number', 'like', $s)
+                    ->orWhere('referral_code', 'like', $s);
             });
         }
         if (! empty($filters['account_status'])) {

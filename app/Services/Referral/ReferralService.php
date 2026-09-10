@@ -141,13 +141,32 @@ class ReferralService
         $code = $this->ensureReferralCode($user);
         $wallet = $this->getOrCreateEarningsWallet($user->id);
 
-        $referrals = ReferralRelationship::query()
-            ->with(['referee:id,first_name,last_name,email,created_at'])
+        // Active = referee has traded (deposit / card) AND this user earned from it.
+        $tradeActionKeys = ['first_deposit', 'card_create', 'card_fund'];
+
+        $earnedByReferee = ReferralReward::query()
+            ->where('referrer_id', $user->id)
+            ->where('beneficiary_user_id', $user->id)
+            ->where('beneficiary_role', ReferralReward::ROLE_REFERRER)
+            ->where('status', ReferralReward::STATUS_CREDITED)
+            ->whereIn('action_key', $tradeActionKeys)
+            ->where('amount_ngn', '>', 0)
+            ->selectRaw('referee_id, SUM(amount_ngn) as earned_ngn')
+            ->groupBy('referee_id')
+            ->pluck('earned_ngn', 'referee_id');
+
+        $relationships = ReferralRelationship::query()
+            ->with(['referee:id,first_name,last_name,email,created_at,email_verified,kyc_completed'])
             ->where('referrer_id', $user->id)
             ->orderByDesc('id')
-            ->limit(50)
-            ->get()
-            ->map(function (ReferralRelationship $rel) {
+            ->limit(100)
+            ->get();
+
+        $activeCount = 0;
+        $inactiveCount = 0;
+
+        $referrals = $relationships
+            ->map(function (ReferralRelationship $rel) use ($earnedByReferee, &$activeCount, &$inactiveCount) {
                 $referee = $rel->referee;
                 $name = trim(($referee->first_name ?? '').' '.($referee->last_name ?? ''));
                 if ($name === '') {
@@ -155,13 +174,23 @@ class ReferralService
                 }
                 $email = (string) ($referee->email ?? '');
                 $maskedEmail = $email !== '' ? $this->maskEmail($email) : null;
+                $earnedNgn = (float) ($earnedByReferee[$rel->referee_id] ?? 0);
+                $isActive = $earnedNgn > 0;
+                if ($isActive) {
+                    $activeCount++;
+                } else {
+                    $inactiveCount++;
+                }
 
                 return [
                     'id' => $rel->id,
-                    'status' => $rel->status,
+                    'status' => $isActive ? 'active' : 'inactive',
                     'joined_at' => optional($rel->created_at)?->toIso8601String(),
                     'referee_name' => $name,
                     'referee_email_masked' => $maskedEmail,
+                    'email_verified' => (bool) ($referee->email_verified ?? false),
+                    'kyc_completed' => (bool) ($referee->kyc_completed ?? false),
+                    'earned_from_referee_ngn' => round($earnedNgn, 2),
                 ];
             })
             ->values()
@@ -200,11 +229,9 @@ class ReferralService
             'earnings_balance_ngn' => (float) $wallet->balance,
             'min_transfer_to_wallet_ngn' => (float) $settings->min_transfer_to_wallet_ngn,
             'stats' => [
-                'total_referrals' => ReferralRelationship::query()->where('referrer_id', $user->id)->count(),
-                'active_referrals' => ReferralRelationship::query()
-                    ->where('referrer_id', $user->id)
-                    ->where('status', ReferralRelationship::STATUS_ACTIVE)
-                    ->count(),
+                'total_referrals' => $activeCount + $inactiveCount,
+                'active_referrals' => $activeCount,
+                'inactive_referrals' => $inactiveCount,
                 'total_earned_ngn' => round($totalEarned, 2),
                 'total_transferred_ngn' => round($totalTransferred, 2),
             ],
